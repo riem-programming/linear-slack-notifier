@@ -105,12 +105,14 @@ test("oversized body is rejected with a clean 413 and connection close", async (
 test("oversized chunked body without content-length returns 413", async () => {
   await withApp(async () => {}, async (base) => {
     const status = await new Promise<number>((resolve, reject) => {
+      let responded = false;
       const req = request(`${base}/webhooks/linear`, { method: "POST" }, (res) => {
+        responded = true;
         res.resume();
         resolve(res.statusCode ?? 0);
       });
       req.on("error", (error) => {
-        if (!req.res) reject(error);
+        if (!responded) reject(error);
       });
       const chunk = Buffer.alloc(1_000, "x");
       for (let i = 0; i < 10; i++) req.write(chunk);

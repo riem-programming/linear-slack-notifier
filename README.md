@@ -16,7 +16,7 @@ Unassignments are ignored. If one update both assigns and completes an issue, on
 
 ## Endpoints
 
-- `POST /webhooks/linear`: verifies the `linear-signature` HMAC-SHA256 header against the raw body, rejects deliveries older than 60 seconds (401), and always answers 200 for valid deliveries, even if Slack fails (the error is logged).
+- `POST /webhooks/linear`: verifies the `linear-signature` HMAC-SHA256 header against the raw body, rejects deliveries older than 60 seconds (401), and always answers 200 for valid deliveries, even if Slack fails. Slack failures are logged and not retried: answering 200 avoids Linear retry storms and duplicate messages, at the cost of possibly losing a notification. Bodies over 1 MB get a 413.
 - `GET /health`: `{ "status": "ok" }`.
 
 ## Configuration
@@ -52,7 +52,7 @@ pnpm typecheck
 2. Provider: GitHub, select this repository and branch.
 3. Build type: Dockerfile.
 4. Set the environment variables (`LINEAR_WEBHOOK_SECRET`, `SLACK_WEBHOOK_URL`).
-5. Container port: `3000`.
+5. Container port: `3000`. It must match the `PORT` variable (default `3000`); if you change `PORT`, change the container port too.
 6. Add a domain with HTTPS enabled, then deploy.
 
 ### Linear webhook
