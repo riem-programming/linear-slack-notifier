@@ -2,6 +2,8 @@
 
 Small Node.js service that receives [Linear](https://linear.app) webhooks and posts custom messages to Slack. Zero runtime dependencies: Node 24 runs the TypeScript sources directly (native type stripping).
 
+Day-to-day tasks (adding people to @mentions, rotating credentials, deploying, troubleshooting) are in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 ## Messages
 
 Slack texts are sent in Spanish. Only `Issue` events are handled; everything else is ignored (still answered with 200).
