@@ -7,26 +7,46 @@ import type { PostToSlack } from "./slack.ts";
 type AppOptions = {
   secret: string;
   postToSlack: PostToSlack;
+  maxBodyBytes?: number;
   now?: () => number;
   logger?: Pick<Console, "info" | "error">;
 };
 
-const MAX_BODY_BYTES = 1_000_000;
+const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 
-const readBody = async (req: IncomingMessage): Promise<Buffer> => {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer;
-    size += buffer.length;
-    if (size > MAX_BODY_BYTES) throw new Error("Body too large");
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks);
-};
+class BodyTooLargeError extends Error {}
 
-const send = (res: ServerResponse, status: number, body?: unknown): void => {
-  res.writeHead(status, { "content-type": "application/json" });
+const readBody = (req: IncomingMessage, maxBytes: number): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      reject(new BodyTooLargeError());
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const onData = (chunk: Buffer): void => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        req.off("data", onData);
+        req.pause();
+        reject(new BodyTooLargeError());
+        return;
+      }
+      chunks.push(chunk);
+    };
+    req.on("data", onData);
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+
+const send = (
+  res: ServerResponse,
+  status: number,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): void => {
+  res.writeHead(status, { "content-type": "application/json", ...headers });
   res.end(body === undefined ? undefined : JSON.stringify(body));
 };
 
@@ -44,15 +64,22 @@ const errorMessage = (error: unknown): string =>
 export const createApp = ({
   secret,
   postToSlack,
+  maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   now = Date.now,
   logger = console,
 }: AppOptions): Server => {
   const handleWebhook = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     let raw: Buffer;
     try {
-      raw = await readBody(req);
-    } catch {
-      send(res, 413, { error: "payload too large" });
+      raw = await readBody(req, maxBodyBytes);
+    } catch (error) {
+      if (error instanceof BodyTooLargeError) {
+        req.resume();
+        setTimeout(() => req.destroy(), 5000).unref();
+        send(res, 413, { error: "payload too large" }, { connection: "close" });
+      } else {
+        send(res, 400, { error: "could not read body" });
+      }
       return;
     }
 

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { request } from "node:http";
 import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.ts";
@@ -11,7 +12,7 @@ const withApp = async (
   postToSlack: (text: string) => Promise<void>,
   run: (base: string) => Promise<void>,
 ): Promise<void> => {
-  const server = createApp({ secret, postToSlack, now: () => 1_000_000, logger: silent });
+  const server = createApp({ secret, postToSlack, maxBodyBytes: 2_000, now: () => 1_000_000, logger: silent });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   try {
     await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
@@ -91,4 +92,30 @@ test("ignored event returns 200 without Slack call", async () => {
     assert.equal((await post(base, body, sign(body))).status, 200);
   });
   assert.deepEqual(sent, []);
+});
+
+test("oversized body is rejected with a clean 413 and connection close", async () => {
+  await withApp(async () => {}, async (base) => {
+    const res = await post(base, "x".repeat(4_000), "00".repeat(32));
+    assert.equal(res.status, 413);
+    assert.equal(res.headers.get("connection"), "close");
+  });
+});
+
+test("oversized chunked body without content-length returns 413", async () => {
+  await withApp(async () => {}, async (base) => {
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request(`${base}/webhooks/linear`, { method: "POST" }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on("error", (error) => {
+        if (!req.res) reject(error);
+      });
+      const chunk = Buffer.alloc(1_000, "x");
+      for (let i = 0; i < 10; i++) req.write(chunk);
+      req.end();
+    });
+    assert.equal(status, 413);
+  });
 });
