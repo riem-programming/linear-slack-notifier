@@ -22,11 +22,16 @@ const nonEmptyString = (value: unknown): string | null =>
 const nameOf = (value: unknown): string | null =>
   isRecord(value) ? nonEmptyString(value.name) : null;
 
+const escapeText = (value: string): string =>
+  value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const escapeUrl = (value: string): string => value.replace(/&/g, "&amp;");
+
 const parseIssueEvent = (payload: unknown): IssueEvent | null => {
   if (!isRecord(payload) || payload.type !== "Issue") return null;
   const action = nonEmptyString(payload.action);
-  const actor = nameOf(payload.actor);
-  if (!action || !actor || !isRecord(payload.data)) return null;
+  const actor = nameOf(payload.actor) ?? "Alguien";
+  if (!action || !isRecord(payload.data)) return null;
 
   const identifier = nonEmptyString(payload.data.identifier);
   const title = nonEmptyString(payload.data.title);
@@ -52,20 +57,23 @@ export const buildMessage = (payload: unknown): string | null => {
   const event = parseIssueEvent(payload);
   if (!event) return null;
 
-  const { actor, data, updatedFrom } = event;
-  const link = `<${data.url}|${data.identifier}>`;
+  const { data, updatedFrom } = event;
+  const actor = escapeText(event.actor);
+  const assignee = data.assignee ? escapeText(data.assignee) : null;
+  const title = escapeText(data.title);
+  const link = `<${escapeUrl(data.url)}|${escapeText(data.identifier)}>`;
 
   if (event.action === "create") {
-    const suffix = data.assignee ? ` y se lo asignó a ${data.assignee}` : "";
-    return `${actor} creó ${link}: ${data.title}${suffix}`;
+    const suffix = assignee ? ` y se lo asignó a ${assignee}` : "";
+    return `${actor} creó ${link}: ${title}${suffix}`;
   }
 
   if (event.action === "update" && updatedFrom) {
     if ("stateId" in updatedFrom && data.stateType === "completed") {
-      return `${data.assignee ?? actor} resolvió ${link} ✅: ${data.title}`;
+      return `${assignee ?? actor} resolvió ${link} ✅: ${title}`;
     }
-    if ("assigneeId" in updatedFrom && data.assignee) {
-      return `${actor} asignó ${link} a ${data.assignee}: ${data.title}`;
+    if ("assigneeId" in updatedFrom && assignee) {
+      return `${actor} asignó ${link} a ${assignee}: ${title}`;
     }
   }
 

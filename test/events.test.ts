@@ -106,3 +106,34 @@ test("malformed payloads are ignored", () => {
   assert.equal(buildMessage({ action: "create", type: "Issue" }), null);
   assert.equal(buildMessage({ action: "create", type: "Issue", actor, data: { title: 1 } }), null);
 });
+
+test("escapes mrkdwn control characters in title, names and identifier", () => {
+  const message = buildMessage({
+    action: "create", type: "Issue", actor: { name: "A & B" },
+    data: { ...data, title: "<!channel> deploy", identifier: "K<1>", assignee: { name: "C > D" } },
+  });
+  assert.equal(
+    message,
+    "A &amp; B creó <https://linear.app/kamai/issue/KAMAITI-9/fix-login|K&lt;1&gt;>: &lt;!channel&gt; deploy y se lo asignó a C &gt; D",
+  );
+  assert.ok(!message?.includes("<!channel>"));
+});
+
+test("escapes only ampersands in the url", () => {
+  const message = buildMessage({
+    action: "create", type: "Issue", actor,
+    data: { ...data, url: "https://l/x?a=1&b=2" },
+  });
+  assert.equal(message, "Ana creó <https://l/x?a=1&amp;b=2|KAMAITI-9>: Fix login");
+});
+
+test("missing actor falls back to Alguien", () => {
+  assert.equal(
+    buildMessage({ action: "create", type: "Issue", data }),
+    `Alguien creó ${link}: Fix login`,
+  );
+  assert.equal(
+    buildMessage({ action: "create", type: "Issue", actor: {}, data }),
+    `Alguien creó ${link}: Fix login`,
+  );
+});
