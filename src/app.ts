@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
-import { buildMessage } from "./events.ts";
+import { analyzeEvent } from "./events.ts";
 import type { UserMap } from "./events.ts";
 import { isFresh, verifySignature } from "./signature.ts";
 import type { PostToSlack } from "./slack.ts";
@@ -102,7 +102,8 @@ export const createApp = ({
       return;
     }
 
-    const message = buildMessage(payload, userMap);
+    const { message, log } = analyzeEvent(payload, userMap);
+    if (log) logger.info(log);
     send(res, 200, { ok: true });
     if (!message) return;
 

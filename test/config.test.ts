@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig } from "../src/config.ts";
+import { describeUserMap, loadConfig } from "../src/config.ts";
 
 test("loads required vars and defaults port to 3000", () => {
   const config = loadConfig({ LINEAR_WEBHOOK_SECRET: "a", SLACK_WEBHOOK_URL: "https://x" });
@@ -53,4 +53,11 @@ test("SLACK_USER_MAP keeps a __proto__ key as a regular own key", () => {
   const { slackUserMap } = loadConfig({ ...base, SLACK_USER_MAP: '{"__proto__":"U123"}' });
   assert.equal(Object.hasOwn(slackUserMap, "__proto__"), true);
   assert.equal(Object.getPrototypeOf(slackUserMap), Object.prototype);
+});
+
+test("describeUserMap reports not set, empty and entry counts without values", () => {
+  assert.equal(describeUserMap(undefined, {}), "SLACK_USER_MAP not set");
+  assert.equal(describeUserMap("", {}), "SLACK_USER_MAP set but empty");
+  assert.equal(describeUserMap("{}", {}), "Slack user map: 0 entries");
+  assert.equal(describeUserMap("x", { a: "U1", b: "U2" }), "Slack user map: 2 entries");
 });

@@ -1,5 +1,5 @@
 import { createApp } from "./app.ts";
-import { loadConfig } from "./config.ts";
+import { describeUserMap, loadConfig } from "./config.ts";
 import type { Config } from "./config.ts";
 import { createSlackClient } from "./slack.ts";
 
@@ -14,6 +14,7 @@ const readConfig = (): Config => {
 
 const start = (): void => {
   const config = readConfig();
+  console.info(describeUserMap(process.env.SLACK_USER_MAP, config.slackUserMap));
   const server = createApp({
     secret: config.linearWebhookSecret,
     userMap: config.slackUserMap,

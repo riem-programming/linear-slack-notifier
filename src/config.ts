@@ -45,3 +45,9 @@ export const loadConfig = (env: Env = process.env): Config => {
   }
   return { linearWebhookSecret, slackWebhookUrl, port, slackUserMap: parseUserMap(env.SLACK_USER_MAP) };
 };
+
+export const describeUserMap = (raw: string | undefined, map: Record<string, string>): string => {
+  if (raw === undefined) return "SLACK_USER_MAP not set";
+  if (raw.trim() === "") return "SLACK_USER_MAP set but empty";
+  return `Slack user map: ${Object.keys(map).length} entries`;
+};

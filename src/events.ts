@@ -60,40 +60,69 @@ const parseIssueEvent = (payload: unknown): IssueEvent | null => {
 
 export type UserMap = Readonly<Record<string, string>>;
 
-export const buildMessage = (payload: unknown, userMap: UserMap = {}): string | null => {
+export type Analysis = { message: string | null; log: string | null };
+
+const IGNORED_UPDATE = "update without assignee/state change";
+
+export const analyzeEvent = (payload: unknown, userMap: UserMap = {}): Analysis => {
   const event = parseIssueEvent(payload);
-  if (!event) return null;
+  if (!event) {
+    const isIssue = isRecord(payload) && payload.type === "Issue";
+    const action = isRecord(payload) ? (nonEmptyString(payload.action) ?? "unknown") : "unknown";
+    return {
+      message: null,
+      log: isIssue ? `Issue event ignored: action=${action} reason=missing issue fields` : null,
+    };
+  }
 
   const { data, updatedFrom } = event;
+  const isMapped = (person: Person | null): boolean =>
+    Boolean(person?.id && Object.hasOwn(userMap, person.id));
   const render = (person: Person): string => {
-    if (person.id && Object.hasOwn(userMap, person.id)) return `<@${userMap[person.id]}>`;
+    if (person.id && isMapped(person)) return `<@${userMap[person.id]}>`;
     return person.name ? escapeText(person.name) : "Alguien";
   };
   const actor = render(event.actor);
-  const hasIdentity = (person: Person): boolean =>
-    Boolean(person.name) || Boolean(person.id && Object.hasOwn(userMap, person.id));
-  const assignee = data.assignee && hasIdentity(data.assignee) ? render(data.assignee) : null;
+  const assignee =
+    data.assignee && (data.assignee.name || isMapped(data.assignee)) ? render(data.assignee) : null;
   const title = escapeText(data.title);
   const link = `<${escapeUrl(data.url)}|${escapeText(data.identifier)}>`;
 
+  const sent = (kind: string, message: string): Analysis => ({
+    message,
+    log:
+      `Issue event: kind=${kind} actor=${event.actor.id ?? "none"} actor_mapped=${isMapped(event.actor) ? "yes" : "no"}` +
+      ` assignee=${data.assignee?.id ?? "none"} assignee_mapped=${isMapped(data.assignee) ? "yes" : "no"}`,
+  });
+  const ignored = (reason: string): Analysis => ({
+    message: null,
+    log: `Issue event ignored: action=${event.action} reason=${reason}`,
+  });
+
   if (event.action === "create") {
     const suffix = assignee ? ` y se lo asignó a ${assignee}` : "";
-    return `${actor} creó ${link}: ${title}${suffix}`;
+    return sent("created", `${actor} creó ${link}: ${title}${suffix}`);
   }
 
-  if (event.action === "update" && updatedFrom) {
-    const becameCompleted =
-      "stateId" in updatedFrom &&
-      data.stateType === "completed" &&
-      "completedAt" in updatedFrom &&
-      updatedFrom.completedAt == null;
-    if (becameCompleted) {
-      return `${assignee ?? actor} resolvió ${link} ✅: ${title}`;
+  if (event.action === "update") {
+    if (updatedFrom) {
+      const becameCompleted =
+        "stateId" in updatedFrom &&
+        data.stateType === "completed" &&
+        "completedAt" in updatedFrom &&
+        updatedFrom.completedAt == null;
+      if (becameCompleted) {
+        return sent("resolved", `${assignee ?? actor} resolvió ${link} ✅: ${title}`);
+      }
+      if ("assigneeId" in updatedFrom && assignee) {
+        return sent("assigned", `${actor} asignó ${link} a ${assignee}: ${title}`);
+      }
     }
-    if ("assigneeId" in updatedFrom && assignee) {
-      return `${actor} asignó ${link} a ${assignee}: ${title}`;
-    }
+    return ignored(IGNORED_UPDATE);
   }
 
-  return null;
+  return ignored("unsupported action");
 };
+
+export const buildMessage = (payload: unknown, userMap: UserMap = {}): string | null =>
+  analyzeEvent(payload, userMap).message;

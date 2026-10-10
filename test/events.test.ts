@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildMessage } from "../src/events.ts";
+import { analyzeEvent, buildMessage } from "../src/events.ts";
 
 const data = {
   identifier: "KAMAITI-9",
@@ -273,4 +273,41 @@ test("assigneeId-only mapped renders a mention", () => {
     }, userMap),
     `<@U0BETO> resolvió ${link} ✅: Fix login`,
   );
+});
+
+test("analyzeEvent logs kind, ids and mapped flags for sent messages", () => {
+  const result = analyzeEvent({
+    action: "create", type: "Issue", actor: { id: "u-ana", name: "Ana" },
+    data: { ...data, assignee: { id: "other", name: "Beto" } },
+  }, userMap);
+  assert.equal(result.message, `<@U0ANA> creó ${link}: Fix login y se lo asignó a Beto`);
+  assert.equal(result.log, "Issue event: kind=created actor=u-ana actor_mapped=yes assignee=other assignee_mapped=no");
+});
+
+test("analyzeEvent logs none for missing ids", () => {
+  const result = analyzeEvent({ action: "create", type: "Issue", actor: { name: "Ana" }, data }, userMap);
+  assert.equal(result.log, "Issue event: kind=created actor=none actor_mapped=no assignee=none assignee_mapped=no");
+});
+
+test("analyzeEvent logs a reason for ignored Issue events", () => {
+  assert.equal(
+    analyzeEvent({ action: "update", type: "Issue", actor, data, updatedFrom: { title: "x" } }).log,
+    "Issue event ignored: action=update reason=update without assignee/state change",
+  );
+  assert.equal(
+    analyzeEvent({ action: "update", type: "Issue", actor, data, updatedFrom: { assigneeId: "x" } }).log,
+    "Issue event ignored: action=update reason=update without assignee/state change",
+  );
+  assert.equal(
+    analyzeEvent({ action: "remove", type: "Issue", actor, data }).log,
+    "Issue event ignored: action=remove reason=unsupported action",
+  );
+  assert.equal(
+    analyzeEvent({ action: "create", type: "Issue", actor }).log,
+    "Issue event ignored: action=create reason=missing issue fields",
+  );
+});
+
+test("analyzeEvent does not log for non-Issue payloads", () => {
+  assert.deepEqual(analyzeEvent({ type: "Comment" }), { message: null, log: null });
 });
