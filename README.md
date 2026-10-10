@@ -26,8 +26,22 @@ Unassignments are ignored. If one update both assigns and completes an issue, on
 | `LINEAR_WEBHOOK_SECRET` | yes | Linear webhook signing secret |
 | `SLACK_WEBHOOK_URL` | yes | Slack Incoming Webhook URL |
 | `PORT` | no | HTTP port, default `3000` |
+| `SLACK_USER_MAP` | no | JSON object mapping Linear user ID to Slack member ID, see below |
 
 The service fails fast at startup if a required variable is missing.
+
+### Slack mentions
+
+By default people appear by name. Set `SLACK_USER_MAP` to turn them into real Slack mentions (`<@U0123ABCDEF>`), for both the actor and the assignee in every message:
+
+```sh
+SLACK_USER_MAP={"<linear-user-id>":"U0123ABCDEF","<another-linear-user-id>":"U0456GHIJKL"}
+```
+
+- Slack member ID: open the person's Slack profile -> ⋮ -> Copy member ID (starts with `U` or `W`).
+- Linear user ID: the `actor.id` / `data.assignee.id` of a webhook payload, or query the Linear API (`users { nodes { id name } }`).
+- Users not in the map fall back to their (escaped) name.
+- The service fails at startup if the value is not a JSON object or any Slack ID does not match `^[UW][A-Z0-9]+$`.
 
 ## Run locally
 
