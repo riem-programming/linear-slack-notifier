@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 const MAX_AGE_MS = 60_000;
 
 export const verifySignature = (
-  rawBody: string,
+  rawBody: string | Buffer,
   signature: string | undefined,
   secret: string,
 ): boolean => {

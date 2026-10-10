@@ -39,3 +39,10 @@ test("isFresh rejects stale, missing or non-numeric timestamps", () => {
   assert.equal(isFresh("123", now), false);
   assert.equal(isFresh(Number.NaN, now), false);
 });
+
+test("verifySignature works over raw Buffer bytes that are not valid UTF-8", () => {
+  const raw = Buffer.from([0x7b, 0xff, 0xfe, 0x7d]);
+  const signature = createHmac("sha256", secret).update(raw).digest("hex");
+  assert.equal(verifySignature(raw, signature, secret), true);
+  assert.equal(verifySignature(Buffer.from(raw.toString("utf8")), signature, secret), false);
+});

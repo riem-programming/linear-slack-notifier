@@ -13,7 +13,7 @@ type AppOptions = {
 
 const MAX_BODY_BYTES = 1_000_000;
 
-const readBody = async (req: IncomingMessage): Promise<string> => {
+const readBody = async (req: IncomingMessage): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -22,7 +22,7 @@ const readBody = async (req: IncomingMessage): Promise<string> => {
     if (size > MAX_BODY_BYTES) throw new Error("Body too large");
     chunks.push(buffer);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks);
 };
 
 const send = (res: ServerResponse, status: number, body?: unknown): void => {
@@ -48,7 +48,7 @@ export const createApp = ({
   logger = console,
 }: AppOptions): Server => {
   const handleWebhook = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    let raw: string;
+    let raw: Buffer;
     try {
       raw = await readBody(req);
     } catch {
@@ -62,7 +62,7 @@ export const createApp = ({
       return;
     }
 
-    const payload = parseJson(raw);
+    const payload = parseJson(raw.toString("utf8"));
     const timestamp =
       typeof payload === "object" && payload !== null && "webhookTimestamp" in payload
         ? payload.webhookTimestamp
