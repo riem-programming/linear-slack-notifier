@@ -16,6 +16,7 @@ const start = (): void => {
   const config = readConfig();
   const server = createApp({
     secret: config.linearWebhookSecret,
+    userMap: config.slackUserMap,
     postToSlack: createSlackClient(config.slackWebhookUrl),
   });
 

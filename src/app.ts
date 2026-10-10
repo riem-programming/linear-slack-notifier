@@ -1,12 +1,14 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { buildMessage } from "./events.ts";
+import type { UserMap } from "./events.ts";
 import { isFresh, verifySignature } from "./signature.ts";
 import type { PostToSlack } from "./slack.ts";
 
 type AppOptions = {
   secret: string;
   postToSlack: PostToSlack;
+  userMap?: UserMap;
   maxBodyBytes?: number;
   now?: () => number;
   logger?: Pick<Console, "info" | "error">;
@@ -64,6 +66,7 @@ const errorMessage = (error: unknown): string =>
 export const createApp = ({
   secret,
   postToSlack,
+  userMap = {},
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   now = Date.now,
   logger = console,
@@ -99,7 +102,7 @@ export const createApp = ({
       return;
     }
 
-    const message = buildMessage(payload);
+    const message = buildMessage(payload, userMap);
     send(res, 200, { ok: true });
     if (!message) return;
 

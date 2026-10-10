@@ -1,14 +1,16 @@
+type Person = { id: string | null; name: string | null };
+
 type IssueData = {
   identifier: string;
   title: string;
   url: string;
-  assignee: string | null;
+  assignee: Person | null;
   stateType: string | null;
 };
 
 type IssueEvent = {
   action: string;
-  actor: string;
+  actor: Person;
   data: IssueData;
   updatedFrom: Record<string, unknown> | null;
 };
@@ -19,8 +21,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const nonEmptyString = (value: unknown): string | null =>
   typeof value === "string" && value.length > 0 ? value : null;
 
-const nameOf = (value: unknown): string | null =>
-  isRecord(value) ? nonEmptyString(value.name) : null;
+const personOf = (value: unknown, fallbackId: unknown = null): Person | null => {
+  const id = (isRecord(value) ? nonEmptyString(value.id) : null) ?? nonEmptyString(fallbackId);
+  const name = isRecord(value) ? nonEmptyString(value.name) : null;
+  return id || name ? { id, name } : null;
+};
 
 const escapeText = (value: string): string =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -30,7 +35,7 @@ const escapeUrl = (value: string): string => value.replace(/&/g, "&amp;");
 const parseIssueEvent = (payload: unknown): IssueEvent | null => {
   if (!isRecord(payload) || payload.type !== "Issue") return null;
   const action = nonEmptyString(payload.action);
-  const actor = nameOf(payload.actor) ?? "Alguien";
+  const actor = personOf(payload.actor) ?? { id: null, name: null };
   if (!action || !isRecord(payload.data)) return null;
 
   const identifier = nonEmptyString(payload.data.identifier);
@@ -46,20 +51,26 @@ const parseIssueEvent = (payload: unknown): IssueEvent | null => {
       identifier,
       title,
       url,
-      assignee: nameOf(payload.data.assignee),
+      assignee: personOf(payload.data.assignee, payload.data.assigneeId),
       stateType: isRecord(state) ? nonEmptyString(state.type) : null,
     },
     updatedFrom: isRecord(payload.updatedFrom) ? payload.updatedFrom : null,
   };
 };
 
-export const buildMessage = (payload: unknown): string | null => {
+export type UserMap = Readonly<Record<string, string>>;
+
+export const buildMessage = (payload: unknown, userMap: UserMap = {}): string | null => {
   const event = parseIssueEvent(payload);
   if (!event) return null;
 
   const { data, updatedFrom } = event;
-  const actor = escapeText(event.actor);
-  const assignee = data.assignee ? escapeText(data.assignee) : null;
+  const render = (person: Person): string => {
+    if (person.id && Object.hasOwn(userMap, person.id)) return `<@${userMap[person.id]}>`;
+    return person.name ? escapeText(person.name) : "Alguien";
+  };
+  const actor = render(event.actor);
+  const assignee = data.assignee ? render(data.assignee) : null;
   const title = escapeText(data.title);
   const link = `<${escapeUrl(data.url)}|${escapeText(data.identifier)}>`;
 

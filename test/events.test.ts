@@ -167,3 +167,70 @@ test("moving between completed states does not fire resolved again", () => {
     null,
   );
 });
+
+const userMap = { "u-ana": "U0ANA", "u-beto": "U0BETO" };
+
+test("mapped actor and assignee render as Slack mentions (created)", () => {
+  assert.equal(
+    buildMessage({
+      action: "create", type: "Issue", actor: { id: "u-ana", name: "Ana" },
+      data: { ...data, assignee: { id: "u-beto", name: "Beto" } },
+    }, userMap),
+    `<@U0ANA> creó ${link}: Fix login y se lo asignó a <@U0BETO>`,
+  );
+});
+
+test("assignee id falls back to data.assigneeId", () => {
+  assert.equal(
+    buildMessage({
+      action: "create", type: "Issue", actor: { id: "u-ana", name: "Ana" },
+      data: { ...data, assigneeId: "u-beto", assignee: { name: "Beto" } },
+    }, userMap),
+    `<@U0ANA> creó ${link}: Fix login y se lo asignó a <@U0BETO>`,
+  );
+});
+
+test("unmapped users fall back to escaped names", () => {
+  assert.equal(
+    buildMessage({
+      action: "create", type: "Issue", actor: { id: "zzz", name: "A & B" },
+      data: { ...data, assignee: { id: "yyy", name: "C" } },
+    }, userMap),
+    `A &amp; B creó ${link}: Fix login y se lo asignó a C`,
+  );
+});
+
+test("mixed: mapped actor, unmapped assignee (assigned)", () => {
+  assert.equal(
+    buildMessage({
+      action: "update", type: "Issue", actor: { id: "u-ana", name: "Ana" },
+      data: { ...data, assignee: { id: "nope", name: "Beto" } },
+      updatedFrom: { assigneeId: null },
+    }, userMap),
+    `<@U0ANA> asignó ${link} a Beto: Fix login`,
+  );
+});
+
+test("resolved mentions the mapped assignee, else mapped actor", () => {
+  const completed = { ...data, state: { name: "Done", type: "completed" } };
+  assert.equal(
+    buildMessage({
+      action: "update", type: "Issue", actor: { id: "u-ana", name: "Ana" },
+      data: { ...completed, assignee: { id: "u-beto", name: "Beto" } },
+      updatedFrom: { stateId: "o", completedAt: null },
+    }, userMap),
+    `<@U0BETO> resolvió ${link} ✅: Fix login`,
+  );
+  assert.equal(
+    buildMessage({
+      action: "update", type: "Issue", actor: { id: "u-ana", name: "Ana" },
+      data: completed, updatedFrom: { stateId: "o", completedAt: null },
+    }, userMap),
+    `<@U0ANA> resolvió ${link} ✅: Fix login`,
+  );
+});
+
+test("missing actor name with mapped id still mentions; unmapped is Alguien", () => {
+  assert.equal(buildMessage({ action: "create", type: "Issue", actor: { id: "u-ana" }, data }, userMap), `<@U0ANA> creó ${link}: Fix login`);
+  assert.equal(buildMessage({ action: "create", type: "Issue", actor: { id: "x" }, data }, userMap), `Alguien creó ${link}: Fix login`);
+});
