@@ -69,7 +69,12 @@ export const buildMessage = (payload: unknown): string | null => {
   }
 
   if (event.action === "update" && updatedFrom) {
-    if ("stateId" in updatedFrom && data.stateType === "completed") {
+    const becameCompleted =
+      "stateId" in updatedFrom &&
+      data.stateType === "completed" &&
+      "completedAt" in updatedFrom &&
+      updatedFrom.completedAt == null;
+    if (becameCompleted) {
       return `${assignee ?? actor} resolvió ${link} ✅: ${title}`;
     }
     if ("assigneeId" in updatedFrom && assignee) {

@@ -48,7 +48,7 @@ test("resolved uses assignee name", () => {
     buildMessage({
       action: "update", type: "Issue", actor,
       data: { ...data, assignee: { name: "Beto" }, state: { name: "Done", type: "completed" } },
-      updatedFrom: { stateId: "old" },
+      updatedFrom: { stateId: "old", completedAt: null },
     }),
     `Beto resolvió ${link} ✅: Fix login`,
   );
@@ -59,7 +59,7 @@ test("resolved falls back to actor", () => {
     buildMessage({
       action: "update", type: "Issue", actor,
       data: { ...data, state: { name: "Done", type: "completed" } },
-      updatedFrom: { stateId: "old" },
+      updatedFrom: { stateId: "old", completedAt: null },
     }),
     `Ana resolvió ${link} ✅: Fix login`,
   );
@@ -70,7 +70,7 @@ test("assign + complete in one update sends only resolved", () => {
     buildMessage({
       action: "update", type: "Issue", actor,
       data: { ...data, assignee: { name: "Beto" }, state: { name: "Done", type: "completed" } },
-      updatedFrom: { assigneeId: null, stateId: "old" },
+      updatedFrom: { assigneeId: null, stateId: "old", completedAt: null },
     }),
     `Beto resolvió ${link} ✅: Fix login`,
   );
@@ -135,5 +135,35 @@ test("missing actor falls back to Alguien", () => {
   assert.equal(
     buildMessage({ action: "create", type: "Issue", actor: {}, data }),
     `Alguien creó ${link}: Fix login`,
+  );
+});
+
+test("Todo to Done fires resolved (completedAt was null before)", () => {
+  assert.equal(
+    buildMessage({
+      action: "update", type: "Issue", actor,
+      data: { ...data, state: { name: "Done", type: "completed" } },
+      updatedFrom: { stateId: "todo", completedAt: null },
+    }),
+    `Ana resolvió ${link} ✅: Fix login`,
+  );
+});
+
+test("moving between completed states does not fire resolved again", () => {
+  assert.equal(
+    buildMessage({
+      action: "update", type: "Issue", actor,
+      data: { ...data, state: { name: "Duplicate", type: "completed" } },
+      updatedFrom: { stateId: "done" },
+    }),
+    null,
+  );
+  assert.equal(
+    buildMessage({
+      action: "update", type: "Issue", actor,
+      data: { ...data, state: { name: "Duplicate", type: "completed" } },
+      updatedFrom: { stateId: "done", completedAt: "2026-01-01T00:00:00.000Z" },
+    }),
+    null,
   );
 });
