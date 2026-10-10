@@ -48,3 +48,9 @@ test("SLACK_USER_MAP rejects invalid Slack IDs and names the key", () => {
   assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "{\"k\":5}" }), /SLACK_USER_MAP/);
   assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "{\"k\":\"<@U1>\"}" }), /SLACK_USER_MAP/);
 });
+
+test("SLACK_USER_MAP keeps a __proto__ key as a regular own key", () => {
+  const { slackUserMap } = loadConfig({ ...base, SLACK_USER_MAP: '{"__proto__":"U123"}' });
+  assert.equal(Object.hasOwn(slackUserMap, "__proto__"), true);
+  assert.equal(Object.getPrototypeOf(slackUserMap), Object.prototype);
+});

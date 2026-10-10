@@ -70,7 +70,9 @@ export const buildMessage = (payload: unknown, userMap: UserMap = {}): string | 
     return person.name ? escapeText(person.name) : "Alguien";
   };
   const actor = render(event.actor);
-  const assignee = data.assignee ? render(data.assignee) : null;
+  const hasIdentity = (person: Person): boolean =>
+    Boolean(person.name) || Boolean(person.id && Object.hasOwn(userMap, person.id));
+  const assignee = data.assignee && hasIdentity(data.assignee) ? render(data.assignee) : null;
   const title = escapeText(data.title);
   const link = `<${escapeUrl(data.url)}|${escapeText(data.identifier)}>`;
 

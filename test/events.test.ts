@@ -234,3 +234,43 @@ test("missing actor name with mapped id still mentions; unmapped is Alguien", ()
   assert.equal(buildMessage({ action: "create", type: "Issue", actor: { id: "u-ana" }, data }, userMap), `<@U0ANA> creó ${link}: Fix login`);
   assert.equal(buildMessage({ action: "create", type: "Issue", actor: { id: "x" }, data }, userMap), `Alguien creó ${link}: Fix login`);
 });
+
+test("assigneeId-only unmapped behaves as if there is no assignee", () => {
+  const withId = { ...data, assigneeId: "ghost" };
+  assert.equal(
+    buildMessage({ action: "create", type: "Issue", actor, data: withId }, userMap),
+    `Ana creó ${link}: Fix login`,
+  );
+  assert.equal(
+    buildMessage({ action: "update", type: "Issue", actor, data: withId, updatedFrom: { assigneeId: null } }, userMap),
+    null,
+  );
+  assert.equal(
+    buildMessage({
+      action: "update", type: "Issue", actor,
+      data: { ...withId, state: { name: "Done", type: "completed" } },
+      updatedFrom: { stateId: "o", completedAt: null },
+    }, userMap),
+    `Ana resolvió ${link} ✅: Fix login`,
+  );
+});
+
+test("assigneeId-only mapped renders a mention", () => {
+  const withId = { ...data, assigneeId: "u-beto" };
+  assert.equal(
+    buildMessage({ action: "create", type: "Issue", actor, data: withId }, userMap),
+    `Ana creó ${link}: Fix login y se lo asignó a <@U0BETO>`,
+  );
+  assert.equal(
+    buildMessage({ action: "update", type: "Issue", actor, data: withId, updatedFrom: { assigneeId: null } }, userMap),
+    `Ana asignó ${link} a <@U0BETO>: Fix login`,
+  );
+  assert.equal(
+    buildMessage({
+      action: "update", type: "Issue", actor,
+      data: { ...withId, state: { name: "Done", type: "completed" } },
+      updatedFrom: { stateId: "o", completedAt: null },
+    }, userMap),
+    `<@U0BETO> resolvió ${link} ✅: Fix login`,
+  );
+});

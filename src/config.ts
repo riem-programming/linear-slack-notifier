@@ -26,14 +26,14 @@ const parseUserMap = (raw: string | undefined): Record<string, string> => {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error("Invalid SLACK_USER_MAP: must be a JSON object of Linear user ID to Slack member ID");
   }
-  const map: Record<string, string> = {};
+  const entries: [string, string][] = [];
   for (const [linearId, slackId] of Object.entries(parsed)) {
     if (typeof slackId !== "string" || !SLACK_ID_PATTERN.test(slackId)) {
       throw new Error(`Invalid SLACK_USER_MAP: value for key "${linearId}" must be a Slack member ID like U0123ABC`);
     }
-    map[linearId] = slackId;
+    entries.push([linearId, slackId]);
   }
-  return map;
+  return Object.fromEntries(entries);
 };
 
 export const loadConfig = (env: Env = process.env): Config => {
