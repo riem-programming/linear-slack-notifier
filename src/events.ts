@@ -6,6 +6,7 @@ type IssueData = {
   url: string;
   assignee: Person | null;
   stateType: string | null;
+  projectId: string | null;
 };
 
 type IssueEvent = {
@@ -53,6 +54,7 @@ const parseIssueEvent = (payload: unknown): IssueEvent | null => {
       url,
       assignee: personOf(payload.data.assignee, payload.data.assigneeId),
       stateType: isRecord(state) ? nonEmptyString(state.type) : null,
+      projectId: nonEmptyString(payload.data.projectId),
     },
     updatedFrom: isRecord(payload.updatedFrom) ? payload.updatedFrom : null,
   };
@@ -60,7 +62,7 @@ const parseIssueEvent = (payload: unknown): IssueEvent | null => {
 
 export type UserMap = Readonly<Record<string, string>>;
 
-export type Analysis = { message: string | null; log: string | null };
+export type Analysis = { message: string | null; log: string | null; projectId: string | null };
 
 const IGNORED_UPDATE = "update without assignee/state change";
 
@@ -72,6 +74,7 @@ export const analyzeEvent = (payload: unknown, userMap: UserMap = {}): Analysis 
     return {
       message: null,
       log: isIssue ? `Issue event ignored: action=${action} reason=missing issue fields` : null,
+      projectId: null,
     };
   }
 
@@ -90,12 +93,14 @@ export const analyzeEvent = (payload: unknown, userMap: UserMap = {}): Analysis 
 
   const sent = (kind: string, message: string): Analysis => ({
     message,
+    projectId: data.projectId,
     log:
       `Issue event: kind=${kind} actor=${event.actor.id ?? "none"} actor_mapped=${isMapped(event.actor) ? "yes" : "no"}` +
       ` assignee=${data.assignee?.id ?? "none"} assignee_mapped=${isMapped(data.assignee) ? "yes" : "no"}`,
   });
   const ignored = (reason: string): Analysis => ({
     message: null,
+    projectId: data.projectId,
     log: `Issue event ignored: action=${event.action} reason=${reason}`,
   });
 

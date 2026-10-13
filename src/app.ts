@@ -3,11 +3,11 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { analyzeEvent } from "./events.ts";
 import type { UserMap } from "./events.ts";
 import { isFresh, verifySignature } from "./signature.ts";
-import type { PostToSlack } from "./slack.ts";
+import type { SlackResolver } from "./slack.ts";
 
 type AppOptions = {
   secret: string;
-  postToSlack: PostToSlack;
+  resolveSlack: SlackResolver;
   userMap?: UserMap;
   maxBodyBytes?: number;
   now?: () => number;
@@ -65,7 +65,7 @@ const errorMessage = (error: unknown): string =>
 
 export const createApp = ({
   secret,
-  postToSlack,
+  resolveSlack,
   userMap = {},
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   now = Date.now,
@@ -102,10 +102,16 @@ export const createApp = ({
       return;
     }
 
-    const { message, log } = analyzeEvent(payload, userMap);
+    const { message, log, projectId } = analyzeEvent(payload, userMap);
     if (log) logger.info(log);
     send(res, 200, { ok: true });
     if (!message) return;
+
+    const postToSlack = resolveSlack(projectId);
+    if (!postToSlack) {
+      logger.info(`Skipped Slack notification: project ${projectId ?? "none"} not mapped`);
+      return;
+    }
 
     try {
       await postToSlack(message);

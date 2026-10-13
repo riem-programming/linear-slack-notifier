@@ -26,11 +26,24 @@ Unassignments are ignored. If one update both assigns and completes an issue, on
 | Variable | Required | Description |
 | --- | --- | --- |
 | `LINEAR_WEBHOOK_SECRET` | yes | Linear webhook signing secret |
-| `SLACK_WEBHOOK_URL` | yes | Slack Incoming Webhook URL |
+| `SLACK_PROJECT_WEBHOOKS` | yes | JSON object mapping Linear project UUID to Slack Incoming Webhook URL, see below |
 | `PORT` | no | HTTP port, default `3000` |
 | `SLACK_USER_MAP` | no | JSON object mapping Linear user ID to Slack member ID, see below |
 
 The service fails fast at startup if a required variable is missing.
+
+### Per-project routing
+
+Each Linear project posts to its own Slack channel. Set `SLACK_PROJECT_WEBHOOKS` to a JSON object mapping the Linear **project UUID** to the Incoming Webhook URL of the target channel:
+
+```sh
+SLACK_PROJECT_WEBHOOKS={"<linear-project-uuid>":"https://hooks.slack.com/services/T000/B000/XXXX","<another-project-uuid>":"https://hooks.slack.com/services/T000/B000/YYYY"}
+```
+
+- The key is the project UUID (`data.projectId` in the webhook payload, or `projects { nodes { id name } }` in the Linear API), not the `P-XXX` slug.
+- Issues without a project, or from a project not in the map, are skipped (still answered with 200) and logged as `Skipped Slack notification: project <id|none> not mapped`.
+- The service fails at startup if the value is not valid JSON, is not an object, is empty, or any value does not start with `https://hooks.slack.com/`. Error messages name the key, never the URL.
+- Startup logs `Slack project routes: N entries` (count only). Webhook URLs are secrets and are never logged.
 
 ### Slack mentions
 
@@ -50,7 +63,7 @@ SLACK_USER_MAP={"<linear-user-id>":"U0123ABCDEF","<another-linear-user-id>":"U04
 ```sh
 pnpm install
 cp .env.example .env   # fill in the values
-LINEAR_WEBHOOK_SECRET=... SLACK_WEBHOOK_URL=... pnpm start
+LINEAR_WEBHOOK_SECRET=... SLACK_PROJECT_WEBHOOKS=... pnpm start
 pnpm test
 pnpm typecheck
 ```
@@ -60,14 +73,14 @@ pnpm typecheck
 ### Slack
 
 1. Create a Slack app (or use an existing one) and enable **Incoming Webhooks**.
-2. Add a webhook to the target channel and copy its URL into `SLACK_WEBHOOK_URL`.
+2. Add a webhook to each target channel and put its URL in `SLACK_PROJECT_WEBHOOKS`, keyed by the Linear project UUID.
 
 ### Deploy on Dokploy
 
 1. Create Service -> Application.
 2. Provider: GitHub, select this repository and branch.
 3. Build type: Dockerfile.
-4. Set the environment variables (`LINEAR_WEBHOOK_SECRET`, `SLACK_WEBHOOK_URL`).
+4. Set the environment variables (`LINEAR_WEBHOOK_SECRET`, `SLACK_PROJECT_WEBHOOKS`).
 5. Container port: `3000`. It must match the `PORT` variable (default `3000`); if you change `PORT`, change the container port too.
 6. Add a domain with HTTPS enabled, then deploy.
 

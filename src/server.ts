@@ -1,7 +1,7 @@
 import { createApp } from "./app.ts";
-import { describeUserMap, loadConfig } from "./config.ts";
+import { describeProjectRoutes, describeUserMap, loadConfig } from "./config.ts";
 import type { Config } from "./config.ts";
-import { createSlackClient } from "./slack.ts";
+import { createSlackRouter } from "./slack.ts";
 
 const readConfig = (): Config => {
   try {
@@ -15,10 +15,11 @@ const readConfig = (): Config => {
 const start = (): void => {
   const config = readConfig();
   console.info(describeUserMap(process.env.SLACK_USER_MAP, config.slackUserMap));
+  console.info(describeProjectRoutes(config.slackProjectWebhooks));
   const server = createApp({
     secret: config.linearWebhookSecret,
     userMap: config.slackUserMap,
-    postToSlack: createSlackClient(config.slackWebhookUrl),
+    resolveSlack: createSlackRouter(config.slackProjectWebhooks),
   });
 
   server.listen(config.port, () => {

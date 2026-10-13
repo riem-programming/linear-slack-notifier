@@ -309,5 +309,21 @@ test("analyzeEvent logs a reason for ignored Issue events", () => {
 });
 
 test("analyzeEvent does not log for non-Issue payloads", () => {
-  assert.deepEqual(analyzeEvent({ type: "Comment" }), { message: null, log: null });
+  assert.deepEqual(analyzeEvent({ type: "Comment" }), { message: null, log: null, projectId: null });
+});
+
+test("analyzeEvent extracts projectId from data", () => {
+  const create = { action: "create", type: "Issue", actor };
+  assert.equal(analyzeEvent({ ...create, data: { ...data, projectId: "proj-1" } }).projectId, "proj-1");
+  assert.equal(
+    analyzeEvent({ action: "update", type: "Issue", actor, data: { ...data, projectId: "proj-1" }, updatedFrom: { title: "x" } }).projectId,
+    "proj-1",
+  );
+});
+
+test("analyzeEvent returns a null projectId when missing, empty, null or not a string", () => {
+  const create = { action: "create", type: "Issue", actor };
+  for (const projectId of [undefined, null, "", 5, {}]) {
+    assert.equal(analyzeEvent({ ...create, data: { ...data, projectId } }).projectId, null);
+  }
 });

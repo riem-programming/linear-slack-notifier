@@ -7,7 +7,7 @@ How to keep the notifier running day to day: add people, rotate credentials, dep
 | Task | Where | Redeploy needed |
 |------|-------|-----------------|
 | Add or remove a person for @mentions | `SLACK_USER_MAP` in Dokploy | Yes |
-| Change the Slack channel | `SLACK_WEBHOOK_URL` in Dokploy | Yes |
+| Add a project or change its Slack channel | `SLACK_PROJECT_WEBHOOKS` in Dokploy | Yes |
 | Rotate the Linear signing secret | Linear webhook + `LINEAR_WEBHOOK_SECRET` in Dokploy | Yes |
 | Ship a code change | `git push` to `main`, then **Deploy** in Dokploy | Yes |
 
@@ -43,18 +43,25 @@ To **remove** a person, delete their pair from the JSON, then Save → Deploy.
 
 | Variable | Where it comes from | Secret |
 |----------|---------------------|--------|
-| `SLACK_WEBHOOK_URL` | Slack app → **Incoming Webhooks** → **Add New Webhook** → pick the channel | **Yes** — anyone with it can post to the channel |
+| `SLACK_PROJECT_WEBHOOKS` | JSON of Linear project UUID → Slack webhook URL (see below). URLs from Slack app → **Incoming Webhooks** → **Add New Webhook** | **Yes** — the URLs let anyone post to the channels |
 | `LINEAR_WEBHOOK_SECRET` | Linear → **Settings → API → Webhooks** → the webhook's signing secret | **Yes** |
 | `SLACK_USER_MAP` | Built by hand (see above) | No |
 | `PORT` | Optional, defaults to `3000`. Must match the container port in Dokploy → Domains | No |
 
 Never commit real values. Only `.env.example` belongs in the repo.
 
-### Change the Slack channel
+### Add a project or change its Slack channel
 
-1. In the Slack app (`api.slack.com/apps`) → **Incoming Webhooks** → **Add New Webhook** → choose the new channel.
-2. Replace `SLACK_WEBHOOK_URL` in Dokploy → Save → Deploy.
-3. Optionally revoke the old webhook in the Slack app.
+1. In the Slack app (`api.slack.com/apps`) → **Incoming Webhooks** → **Add New Webhook** → choose the channel.
+2. Get the Linear **project UUID**. It is not the `P-XXX` slug: use `data.projectId` from a webhook payload, or query `{ projects { nodes { id name } } }` in the Linear API.
+3. Add or edit the pair in `SLACK_PROJECT_WEBHOOKS` in Dokploy (one line of JSON) → Save → Deploy:
+   ```env
+   SLACK_PROJECT_WEBHOOKS={"<project-uuid-1>":"https://hooks.slack.com/services/T000/B000/XXXX","<project-uuid-2>":"https://hooks.slack.com/services/T000/B000/YYYY"}
+   ```
+4. Verify: the startup log shows `Slack project routes: N entries`.
+5. When replacing a webhook, optionally revoke the old one in the Slack app.
+
+Issues from a project that is not in the map (or that have no project) are skipped without an error: Linear still gets a 200 and the log shows `Skipped Slack notification: project <id|none> not mapped`. A UUID typo looks exactly like this.
 
 ### Rotate the Linear signing secret
 
@@ -71,15 +78,18 @@ Start with the **Logs** tab in Dokploy (container logs, not the build log under 
 |---------|--------------|-----|
 | No `Issue event` line after a change in Linear | Linear is not reaching the service | Check the webhook URL and that **Issues** is selected; check that `/health` responds over HTTPS |
 | `401` responses in the logs | `LINEAR_WEBHOOK_SECRET` does not match Linear | Copy the secret again (or rotate it) → Deploy |
-| `Failed to post to Slack` | Wrong or revoked `SLACK_WEBHOOK_URL` | Generate a new Incoming Webhook URL → Deploy |
+| `Skipped Slack notification: project ... not mapped` | Project UUID missing from `SLACK_PROJECT_WEBHOOKS`, typo, or the issue has no project | Copy the id from the log into the map → Deploy |
+| `Failed to post to Slack` | Wrong or revoked webhook URL in `SLACK_PROJECT_WEBHOOKS` | Generate a new Incoming Webhook URL and update the map → Deploy |
 | Names in plain text instead of @mentions | Person not in the map, or a typo in their ID | Compare the `actor=` / `assignee=` IDs in the log with the map keys |
 | Logs never show the `Slack user map` startup line | An old image is running | Deployments tab: confirm the latest deploy shows the newest commit and is **Done**. Use **Deploy**, not Rebuild |
-| Container exits at startup | Invalid `SLACK_USER_MAP` JSON or a missing required variable | The log names the problem; fix the variable → Deploy |
+| Container exits at startup | Invalid `SLACK_USER_MAP` / `SLACK_PROJECT_WEBHOOKS` JSON or a missing required variable | The log names the problem; fix the variable → Deploy |
 
 ### Log lines
 
 | Line | Meaning |
 |------|---------|
+| `Slack project routes: N entries` | Startup: N projects routed to Slack |
+| `Skipped Slack notification: project <id|none> not mapped` | Issue event not sent: its project has no webhook |
 | `Slack user map: N entries` | Startup: mention map loaded with N people |
 | `SLACK_USER_MAP not set` | Startup: no map, all names render as plain text |
 | `Issue event: kind=... actor_mapped=yes\|no assignee_mapped=yes\|no` | A message was sent; shows whether each person was mentioned |
