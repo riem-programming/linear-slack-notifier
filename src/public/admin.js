@@ -7,7 +7,17 @@
   document.body.append(dialog);
   let opener = null;
 
+  let busy = false;
   const load = async (url) => {
+    if (busy) return;
+    busy = true;
+    try {
+      await fetchSheet(url);
+    } finally {
+      busy = false;
+    }
+  };
+  const fetchSheet = async (url) => {
     const res = await fetch(url, { headers: { "X-Admin-Fragment": "1" }, credentials: "same-origin" });
     // A redirect means the session ended: let the browser navigate to the real page instead.
     if (!res.ok || res.redirected) throw new Error("sheet unavailable");
@@ -32,12 +42,17 @@
     }
   });
 
+  // Inside the dialog the project search filters rows on the client: every checkbox stays in the form, so nothing unsaved is lost.
+  const fold = (text) => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
+  const filter = (input) => {
+    const needle = fold(input.value);
+    for (const row of dialog.querySelectorAll("[data-fold]")) row.hidden = needle !== "" && !row.dataset.fold.includes(needle);
+  };
+  dialog.addEventListener("input", (event) => {
+    if (event.target instanceof HTMLInputElement && event.target.type === "search") filter(event.target);
+  });
   dialog.addEventListener("submit", (event) => {
-    const form = event.target;
-    if (!(form instanceof HTMLFormElement) || !form.matches("[data-sheet-search]")) return;
-    event.preventDefault();
-    const url = `${form.action}?${new URLSearchParams(new FormData(form))}`;
-    load(url).catch(() => { window.location.href = url; });
+    if (event.target instanceof HTMLFormElement && event.target.matches("[data-sheet-search]")) event.preventDefault();
   });
 
   dialog.addEventListener("close", () => {

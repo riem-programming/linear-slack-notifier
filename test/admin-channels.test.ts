@@ -33,16 +33,22 @@ test("channelsPage groups channels, renders chips with remove forms, the bot pil
   assert.ok(text.indexOf("Sin proyectos") < text.indexOf("#ventas"));
   assert.match(text, /Bot en el canal/);
   assert.match(text, /Invita al bot con \/invite/);
-  // Removing "Web" from C1 posts the remaining project and the csrf token.
+  // Each chip removes exactly one pair: no snapshot of the other projects travels with it.
   const chip = text.split("<form").find((part) => part.includes('aria-label="Quitar Web')) ?? "";
-  assert.match(chip, /action="\/admin\/channels\/C1\/projects"/);
+  assert.match(chip, /action="\/admin\/channels\/C1\/projects\/p1\/remove"/);
   assert.match(chip, /name="csrf" value="tok"/);
-  assert.match(chip, /name="project" value="p2"/);
-  assert.doesNotMatch(chip, /name="project" value="p1"/);
+  assert.doesNotMatch(chip, /name="project"|name="q"/);
+  const filtered = channelsPage(view({ q: "ges&", channels: channels.slice(0, 1) }), render).value;
+  assert.equal((filtered.match(/<input type="hidden" name="q" value="ges&amp;">/g) ?? []).length, 3);
   assert.match(text, /<a href="\/admin\/channels\/C2\/projects" data-sheet[^>]*>Agregar proyecto<\/a>/);
   assert.equal((text.match(/data-channel/g) ?? []).length, 3);
   // Hostile names are escaped inside attributes too; the guard is checked on the clean channels.
   assertNoInlineCode(channelsPage(view({ channels: channels.slice(0, 2) }), render).value);
+});
+
+test("the refresh form carries a non-empty q only", () => {
+  assert.doesNotMatch(channelsPage(view(), render).value.split("</form>")[0] ?? "", /name="q"/);
+  assert.match(channelsPage(view({ q: "ven" }), render).value.split("</form>")[0] ?? "", /name="q" value="ven"/);
 });
 
 test("channelsPage escapes hostile names, shows search results and a no-match state", () => {
@@ -78,6 +84,10 @@ test("the sheet lists every project, pre-checks the linked ones and hints other 
   assert.match(text, /También en #gestión, #ventas/);
   assert.match(text, /href="\/admin\/channels"[^>]*data-close[^>]*>Cancelar/);
   assert.match(text, />Guardar</);
+  // Every row keeps its folded name so the dialog can filter on the client without losing checkbox state.
+  assert.match(text, /<label class="check" data-fold="web">/);
+  assert.match(sheetFragment(sheetView({ projects: [{ id: "p1", name: "Gestión Ñu" }] })).value, /data-fold="gestion nu"/);
+  assert.match(text, /class="btn btn-secondary" data-close>Cerrar</);
   assert.doesNotMatch(text, /<!doctype/);
   assertNoInlineCode(text);
 });

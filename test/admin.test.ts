@@ -588,16 +588,50 @@ test("channels page filters by name on the server, ignoring accents and case", (
     assert.match(text, /value="GESTION"/);
   }));
 
-test("removing a chip is a project save with the remaining ids", () =>
+const removeChip = async (h: Harness, channel: string, project: string, extra: Record<string, string> = {}, token?: string): Promise<Response> =>
+  fetch(`${h.base}/admin/channels/${channel}/projects/${project}/remove`, {
+    method: "POST", redirect: "manual",
+    headers: { ...h.auth, origin: `http://${h.host}`, "content-type": "application/x-www-form-urlencoded" },
+    body: form({ csrf: token ?? h.csrf, ...extra }),
+  });
+
+test("removing a chip unlinks only that pair, keeps a non-empty q in the redirect and leaves concurrent additions alone", () =>
   withApp(async (h) => {
     seedChannels(h.store);
     h.store.link("C1", "p1");
-    h.store.link("C1", "p2");
-    const page = await (await fetch(`${h.base}/admin/channels`, { headers: h.auth })).text();
-    const chip = page.split("<form").find((part) => part.includes('aria-label="Quitar Web')) ?? "";
-    const res = await saveProjects(h, "C1", [...chip.matchAll(/name="project" value="([^"]+)"/g)].map((m) => m[1] as string));
+    h.store.link("C2", "p1");
+    const res = await removeChip(h, "C1", "p1");
     assert.equal(res.status, 303);
+    assert.equal(res.headers.get("location"), "/admin/channels?status=project-removed");
+    assert.deepEqual(h.store.projectsForChannel("C1"), []);
+    assert.deepEqual(h.store.projectsForChannel("C2").map((p) => p.id), ["p1"]);
+    h.store.link("C1", "p2");
+    const again = await removeChip(h, "C1", "p1", { q: "tést &x" });
+    assert.equal(again.headers.get("location"), "/admin/channels?status=project-removed&q=t%C3%A9st%20%26x");
     assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p2"]);
+    const page = await (await fetch(`${h.base}/admin/channels?status=project-removed`, { headers: h.auth })).text();
+    assert.match(page, /Proyecto quitado del canal/);
+  }));
+
+test("chip removal validates ids, Origin, session and csrf", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    h.store.link("C1", "p1");
+    for (const [channel, project] of [["C9", "p1"], ["C1", "NOPE"], ["c1", "p1"], ["C1", "%E0%A4%A"], ["C1%2F..", "p1"]] as [string, string][]) {
+      assert.equal((await removeChip(h, channel, project)).status, 400, `${channel} ${project}`);
+    }
+    assert.equal((await removeChip(h, "C1", "p1", {}, "0".repeat(64))).status, 403);
+    const url = `${h.base}/admin/channels/C1/projects/p1/remove`;
+    const post = (headers: Record<string, string>) => fetch(url, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: form({ csrf: h.csrf }) });
+    assert.equal((await post({ ...h.auth, origin: "https://evil.example" })).status, 403);
+    assert.equal((await post({ origin: `http://${h.host}` })).status, 401);
+    assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p1"]);
+  }));
+
+test("refresh keeps a non-empty q in the redirect", () =>
+  withApp(async (h) => {
+    assert.equal((await submit(h, "/admin/channels/refresh", { q: "ges" })).headers.get("location"), "/admin/channels?status=refreshed&q=ges");
+    assert.equal((await submit(h, "/admin/channels/refresh", { q: "" })).headers.get("location"), "/admin/channels?status=refreshed");
   }));
 
 const sheetGet = (h: Harness, path: string, headers: Record<string, string> = {}): Promise<Response> =>
@@ -619,6 +653,8 @@ test("the sheet page renders the full page, or only the fragment with X-Admin-Fr
     const frag = await sheetGet(h, "/admin/channels/C1/projects?q=we", { "x-admin-fragment": "1" });
     assert.equal(frag.status, 200);
     assert.equal(frag.headers.get("cache-control"), "no-store");
+    assert.equal(frag.headers.get("vary"), "X-Admin-Fragment");
+    assert.equal(full.headers.get("vary"), "X-Admin-Fragment");
     const text = await frag.text();
     assert.doesNotMatch(text, /<html|sidebar/);
     assert.match(text, /Proyectos de #test/);
@@ -647,7 +683,7 @@ test("admin.js is served from the page and wires the sheet dialog with a navigat
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /javascript/);
     const code = await res.text();
-    for (const needle of ["a[data-sheet]", "X-Admin-Fragment", "showModal", "window.location.href", "data-close", "res.redirected"]) assert.ok(code.includes(needle), needle);
+    for (const needle of ["a[data-sheet]", "X-Admin-Fragment", "showModal", "window.location.href", "data-close", "res.redirected", "data-fold", "busy"]) assert.ok(code.includes(needle), needle);
     assert.doesNotMatch(code, /eval\(|new Function/);
   }));
 

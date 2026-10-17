@@ -30,25 +30,28 @@ export type ChannelsView = {
   q: string;
 };
 
-// Each chip removes its project by saving the channel with the remaining ids.
-const chip = (channel: Channel, project: Project, remaining: Project[], csrf: string): Html =>
-  html`<span class="chip">${project.name}<form method="post" action="${projectsHref(channel.id)}" class="chip-form"><input type="hidden" name="csrf" value="${csrf}">${remaining.map((p) => html`<input type="hidden" name="project" value="${p.id}">`)}<button type="submit" class="chip-x" aria-label="Quitar ${project.name} de #${channel.name}">✕</button></form></span>`;
+// A non-empty search travels with the form so the redirect keeps the filtered list.
+const qField = (q: string): Html | "" => (q ? html`<input type="hidden" name="q" value="${q}">` : "");
 
-const channelRow = (channel: Channel, linked: Project[], csrf: string): Html => {
+// Each chip removes exactly its own pair, so a concurrent addition is never overwritten.
+const chip = (channel: Channel, project: Project, csrf: string, q: string): Html =>
+  html`<span class="chip">${project.name}<form method="post" action="${projectsHref(channel.id)}/${encodeURIComponent(project.id)}/remove" class="chip-form"><input type="hidden" name="csrf" value="${csrf}">${qField(q)}<button type="submit" class="chip-x" aria-label="Quitar ${project.name} de #${channel.name}">✕</button></form></span>`;
+
+const channelRow = (channel: Channel, linked: Project[], csrf: string, q: string): Html => {
   const bot = channel.isMember ? pill("success", "Bot en el canal") : pill("warning", "Invita al bot con /invite");
   const chips = linked.length
-    ? html`<div class="chips">${linked.map((project) => chip(channel, project, linked.filter((p) => p.id !== project.id), csrf))}</div>`
+    ? html`<div class="chips">${linked.map((project) => chip(channel, project, csrf, q))}</div>`
     : "";
   return html`<div class="ch" data-channel><div class="ch-head"><span class="ch-name">#${channel.name}</span>${bot}<a href="${projectsHref(channel.id)}" data-sheet class="ch-add">Agregar proyecto</a></div>${chips}</div>`;
 };
 
 export const channelsPage = (view: ChannelsView, render: Render): Html => {
   const warning = view.linearDown ? flash(false, "No se pudo consultar Linear. Solo se pueden vincular los proyectos ya conocidos.") : "";
-  const refresh = html`<form method="post" action="${CHANNELS_HREF}/refresh"><input type="hidden" name="csrf" value="${view.csrf}">${button({ label: "Actualizar desde Slack", variant: "primary" })}</form>`;
+  const refresh = html`<form method="post" action="${CHANNELS_HREF}/refresh"><input type="hidden" name="csrf" value="${view.csrf}">${qField(view.q)}${button({ label: "Actualizar desde Slack", variant: "primary" })}</form>`;
   const toolbar = html`<div class="toolbar">${refresh}${searchForm(CHANNELS_HREF, "q", "Buscar canal", view.q, "")}</div>`;
   const rows = view.channels.map((channel) => ({ channel, linked: view.linksOf(channel.id) }));
   const group = (title: string, items: typeof rows): Html | "" =>
-    items.length ? html`${sectionHeader(title)}${insetList(items.map(({ channel, linked }) => channelRow(channel, linked, view.csrf)))}` : "";
+    items.length ? html`${sectionHeader(title)}${insetList(items.map(({ channel, linked }) => channelRow(channel, linked, view.csrf, view.q)))}` : "";
   const body = rows.length
     ? html`${group("Con proyectos", rows.filter((r) => r.linked.length > 0))}${group("Sin proyectos", rows.filter((r) => r.linked.length === 0))}`
     : view.q ? emptyState(`No hay canales que coincidan con «${view.q}»`)
@@ -77,7 +80,7 @@ const sheetContent = ({ channel, projects, linked, othersOf, csrf, q }: SheetVie
   const row = (project: Project): Html => {
     const others = othersOf(project.id);
     const hint = others.length ? html`<span class="muted">También en ${others.map((name) => `#${name}`).join(", ")}</span>` : "";
-    return html`<label class="check"><input type="checkbox" name="project" value="${project.id}"${linked.has(project.id) ? " checked" : ""}><span class="check-name">${project.name}</span>${hint}</label>`;
+    return html`<label class="check" data-fold="${foldText(project.name)}"><input type="checkbox" name="project" value="${project.id}"${linked.has(project.id) ? " checked" : ""}><span class="check-name">${project.name}</span>${hint}</label>`;
   };
   const list = visible.length ? insetList(visible.map(row))
     : q ? emptyState(`No hay proyectos que coincidan con «${q}»`) : emptyState("Aún no hay proyectos", "Abre Canales para cargarlos desde Linear.");

@@ -60,6 +60,7 @@ const safeDecode = (value: string): string => {
 const MAX_FORM_BYTES = 100_000;
 const MAX_CHANNEL_PROJECTS = 200;
 const CHANNEL_PROJECTS_ROUTE = /^\/admin\/channels\/([^/]+)\/projects$/;
+const CHANNEL_PROJECT_REMOVE_ROUTE = /^\/admin\/channels\/([^/]+)\/projects\/([^/]+)\/remove$/;
 const CHANNEL_ID = /^[A-Z0-9]{1,32}$/;
 type Page = (options: { title: string; current: NavKey; body: Html }) => Html;
 // Per-request view of the authenticated session: the render function embeds its logout CSRF token.
@@ -68,6 +69,7 @@ type Ctx = { csrf: string; render: Page };
 // Flash messages come from a fixed table keyed by a query value: free text is never reflected.
 const FLASH: Record<string, { ok: boolean; text: string }> = {
   refreshed: { ok: true, text: "Lista de canales actualizada." },
+  "project-removed": { ok: true, text: "Proyecto quitado del canal." },
   "channel-saved": { ok: true, text: "Proyectos del canal guardados." },
   "slack-error": { ok: false, text: "No se pudo consultar Slack. Se muestra la última lista guardada." },
   synced: { ok: true, text: "Personas emparejadas con Slack por correo." },
@@ -162,7 +164,9 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
       othersOf: (projectId: string) => store.channelsFor(projectId).filter((c) => c.id !== channel.id).map((c) => c.name),
       csrf, q: (search.get("q") ?? "").trim().slice(0, MAX_QUERY),
     };
-    page(res, 200, req.headers["x-admin-fragment"] === "1" ? sheetFragment(view) : sheetPage(view, render));
+    const content = req.headers["x-admin-fragment"] === "1" ? sheetFragment(view) : sheetPage(view, render);
+    // The same URL answers a fragment or a full page, so caches must key on the header.
+    sendHtml(res, 200, content.value, { ...SECURITY_HEADERS, vary: "X-Admin-Fragment" });
   };
 
   const people = async (res: ServerResponse, status: string | null, { csrf, render }: Ctx): Promise<void> => {
@@ -196,7 +200,9 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
 
-  const done = (res: ServerResponse, status: string, section = "channels"): void => redirect(res, `/admin/${section}?status=${status}`, SECURITY_HEADERS);
+  // `q` is re-appended only when non-empty, so a filtered Canales list survives the redirect.
+  const done = (res: ServerResponse, status: string, section = "channels", q = ""): void =>
+    redirect(res, `/admin/${section}?status=${status}${q ? `&q=${encodeURIComponent(q)}` : ""}`, SECURITY_HEADERS);
 
   const lookupEmail = async (email: string): Promise<string | null> => {
     try {
@@ -236,15 +242,15 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     return back({ set: "override-set", invalid: "invalid-slack-id", "not-found": "person-not-found" }[setOverride(store, user, slackId)]);
   };
 
-  const channelsRefresh = async (res: ServerResponse): Promise<void> => {
+  const channelsRefresh = async (res: ServerResponse, q: string): Promise<void> => {
     try {
       if (!slack?.listChannels) throw new Error("Slack unavailable");
       for (const channel of await slack.listChannels()) store.upsertChannel(channel);
     } catch (error) {
       logUpstream("Slack channel list", error);
-      return done(res, "slack-error");
+      return done(res, "slack-error", "channels", q);
     }
-    done(res, "refreshed");
+    done(res, "refreshed", "channels", q);
   };
 
   // Replaces the channel's links with the repeated `project` fields; validates everything before the single transaction.
@@ -257,6 +263,17 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     if (!valid) return send(res, 400, { error: "invalid request" }, SECURITY_HEADERS);
     store.setChannelProjects(channelId, projectIds);
     done(res, "channel-saved");
+  };
+
+  // Unlinks one pair only; unknown ids are rejected like in the save, and an already-missing link is a no-op.
+  const channelProjectRemove = (res: ServerResponse, rawChannel: string, rawProject: string, q: string): void => {
+    const channelId = safeDecode(rawChannel);
+    const projectId = safeDecode(rawProject);
+    const valid = CHANNEL_ID.test(channelId) && store.listChannels().some((c) => c.id === channelId)
+      && store.listProjects().some((p) => p.id === projectId);
+    if (!valid) return send(res, 400, { error: "invalid request" }, SECURITY_HEADERS);
+    store.unlink(channelId, projectId);
+    done(res, "project-removed", "channels", q.trim().slice(0, MAX_QUERY));
   };
 
   // Same-origin check plus the form body; answers 403/413/400 itself and returns null when it cannot.
@@ -280,7 +297,9 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     if (!safeEqual(form.csrf ?? "", csrf)) return send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
     const route = path.replace(/\/+$/, "");
     if (route === "/admin/logout") return redirect(res, "/admin/login?status=logged-out", { ...SECURITY_HEADERS, "set-cookie": clearSessionCookie() });
-    if (route === "/admin/channels/refresh") return channelsRefresh(res);
+    if (route === "/admin/channels/refresh") return channelsRefresh(res, (form.q ?? "").trim().slice(0, MAX_QUERY));
+    const removal = CHANNEL_PROJECT_REMOVE_ROUTE.exec(route);
+    if (removal) return channelProjectRemove(res, removal[1] ?? "", removal[2] ?? "", form.q ?? "");
     const sheet = CHANNEL_PROJECTS_ROUTE.exec(route);
     if (sheet) return channelProjectsPost(res, sheet[1] ?? "", params);
     if (route === "/admin/people/sync" || route === "/admin/people/override") return peoplePost(res, route, form);

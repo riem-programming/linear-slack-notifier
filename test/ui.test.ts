@@ -76,6 +76,7 @@ test("sheet has a titled section, a close link and the body", () => {
   const out = sheet({ title: "Agregar", closeHref: "/admin/channels", body: html`<p>hola</p>` }).value;
   assert.match(out, /<section class="sheet" aria-labelledby="sheet-title">/);
   assert.match(out, /<h2 id="sheet-title">Agregar<\/h2>/);
+  assert.match(out, /<a href="\/admin\/channels"[^>]*data-close/);
   assert.match(out, /href="\/admin\/channels"/);
   assert.match(out, /<p>hola<\/p>/);
 });
