@@ -3,7 +3,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 const sha256 = (value: string): Buffer => createHash("sha256").update(value).digest();
 
 // Hashing both sides first gives equal-length buffers, so the comparison leaks neither content nor length.
-const safeEqual = (a: string, b: string): boolean => timingSafeEqual(sha256(a), sha256(b));
+export const safeEqual = (a: string, b: string): boolean => timingSafeEqual(sha256(a), sha256(b));
 
 // The user name is ignored: there is a single shared admin password. An unset or empty password denies everything.
 export const checkBasicAuth = (header: string | string[] | undefined, password: string | undefined): boolean => {
