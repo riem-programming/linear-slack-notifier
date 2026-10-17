@@ -138,3 +138,11 @@ Completed: 3b.1, 3b.2, 3b.3. Remaining: slices 4a through 5b.
 - Failed rows show the Spanish reason plus every target with its error; notified rows show channels and "mencionó a ...".
 - `admin.ts` passes `now()` to the Estado page so "Hoy" and "Ayer" are testable with the injected clock.
 - No new runtime dependencies; CSS only in `admin.css`.
+
+### Review follow-up on slice 3b
+- Counters always render (0/0/0 on empty and no-match) with the caption "En los N eventos mostrados"; the empty state sits below them.
+- Failed targets read "#canal: falló" or "#canal: falló (error)"; notified targets are just "#canal".
+- Avisos with `q` and no results links to "Todos los eventos" with the same `q`.
+- `groupByDay`/`dayBefore` never throw on an invalid `now` or `received_at`; undated rows form one "Sin fecha" group at the end.
+- External issue links carry a visually hidden "(se abre en una pestaña nueva)" (`.sr-only`).
+- Tests: hostile `q` stays quoted in the field and escaped in the empty state; whitespace-only `q` is no search. `pnpm test` 367/367, `pnpm typecheck` clean.
