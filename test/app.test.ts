@@ -114,7 +114,7 @@ test("valid signed webhook posts to the linked channel and logs one notified row
       {
         id: 0, receivedAt: "", deliveryId: "d-1", kind: "created", issueIdentifier: "K-1", issueTitle: "T",
         projectId: "proj-1", issueId: "iss-1", assigneeId: null, outcome: "notified", reason: null,
-        targets: [{ channel: "C1", outcome: "notified" }],
+        targets: [{ channel: "C1", outcome: "notified" }], issueUrl: "https://l/K-1", mentions: [],
       },
     );
   });
@@ -219,6 +219,31 @@ test("mentions come from the people stored in SQLite", async () => {
     await deliver(h, createdBody({ id: "u-beto" }), "d-1");
     assert.deepEqual(h.sent, ["C1|Ana creó <https://l/K-1|K-1>: T y se lo asignó a <@UBETO>"]);
     assert.equal(h.store.recentEvents()[0]?.assigneeId, "u-beto");
+  });
+});
+
+test("a mention is logged by display name only, and never as a Slack id", async () => {
+  await withApp(async (h) => {
+    h.store.upsertPerson({ linearUserId: "u-beto", name: "Beto Stored", email: null, slackUserId: "UBETO", matchSource: "manual" });
+    await deliver(h, createdBody({ id: "u-beto" }), "d-1");
+    const [row] = h.store.recentEvents();
+    assert.deepEqual(row?.mentions, ["Beto Stored"]);
+    assert.equal(JSON.stringify(row).includes("UBETO"), false);
+  });
+});
+
+test("no mentions are recorded when nothing was delivered", async () => {
+  await withApp(async (h) => {
+    h.store.upsertPerson({ linearUserId: "u-beto", name: "Beto", email: null, slackUserId: "UBETO", matchSource: "manual" });
+    await deliver(h, createdBody({ id: "u-beto" }).replace('"proj-1"', '"proj-other"'), "d-1");
+    assert.deepEqual(h.store.recentEvents()[0]?.mentions, []);
+  });
+});
+
+test("an unclassified event stores no issue url", async () => {
+  await withApp(async (h) => {
+    await deliver(h, JSON.stringify({ type: "Comment", webhookTimestamp: 1_000_000 }), "d-1");
+    assert.equal(h.store.recentEvents()[0]?.issueUrl, null);
   });
 });
 

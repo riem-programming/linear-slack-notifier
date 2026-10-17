@@ -242,3 +242,22 @@ test("recentEvents q works on legacy rows with null identifier and title", () =>
   seed(store, [{ issueIdentifier: null, issueTitle: null }, { issueTitle: "needle" }]);
   assert.deepEqual(store.recentEvents(50, { q: "needle" }).map((e) => e.issueTitle), ["needle"]);
 });
+
+test("beginEvent stores issue_url (null when absent) and finishEvent stores mention names", () => {
+  const { store } = setup();
+  const withUrl = store.beginEvent(entry("u1", { issueUrl: "https://linear.app/k/KAM-1" }));
+  const without = store.beginEvent(entry("u2"));
+  assert.ok(withUrl !== null && without !== null);
+  store.finishEvent(withUrl, { outcome: "notified", reason: null, targets: [], mentions: ["Ana Gómez"] });
+  store.finishEvent(without, { outcome: "notified", reason: null, targets: [] });
+  const [second, first] = store.recentEvents();
+  assert.deepEqual([first?.issueUrl, first?.mentions], ["https://linear.app/k/KAM-1", ["Ana Gómez"]]);
+  assert.deepEqual([second?.issueUrl, second?.mentions], [null, []]);
+});
+
+test("rows written before migration 4 read back with null issueUrl and mentions", () => {
+  const { db, store } = setup();
+  db.prepare("INSERT INTO event_log (delivery_id, received_at, kind, outcome) VALUES ('old', '2026-01-01T00:00:00.000Z', 'created', 'notified')").run();
+  const [row] = store.recentEvents();
+  assert.deepEqual([row?.issueUrl, row?.mentions], [null, null]);
+});

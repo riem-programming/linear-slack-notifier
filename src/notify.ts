@@ -4,7 +4,8 @@ import type { EventOutcome, EventTarget } from "./store.ts";
 export type PersonRecord = { slackUserId: string | null; name: string | null };
 export type PersonLookup = (linearUserId: string) => PersonRecord | null;
 
-export type MentionPlan = { actor: string; assignee: string | null; cc: string[] };
+// `mentioned` lists display names (unescaped) of the people written as Slack mentions.
+export type MentionPlan = { actor: string; assignee: string | null; cc: string[]; mentioned: string[] };
 
 const FALLBACK_NAME = "Alguien";
 
@@ -31,6 +32,12 @@ export const planMentions = (notice: IssueNotice, lookup: PersonLookup): Mention
     return plainName(person, record);
   };
 
+  const mentioned: string[] = [];
+  const isMention = (person: Person): boolean => !isActor(person, actor) && Boolean(find(person)?.slackUserId);
+  const noteMention = (person: Person): void => {
+    const name = find(person)?.name ?? person.name;
+    if (isMention(person) && name && !mentioned.includes(name)) mentioned.push(name);
+  };
   const cc: string[] = [];
   if (notice.kind === "completed" || notice.kind === "canceled") {
     const seen = new Set<string>();
@@ -41,13 +48,17 @@ export const planMentions = (notice: IssueNotice, lookup: PersonLookup): Mention
       if (seen.has(person.id ?? rendered)) continue;
       seen.add(person.id ?? rendered);
       cc.push(rendered);
+      noteMention(person);
     }
   }
+
+  if (notice.assignee) noteMention(notice.assignee);
 
   return {
     actor: plainName(actor, find(actor)) ?? FALLBACK_NAME,
     assignee: notice.assignee ? render(notice.assignee) : null,
     cc,
+    mentioned,
   };
 };
 

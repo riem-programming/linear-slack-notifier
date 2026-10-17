@@ -26,12 +26,15 @@ export type EventEntry = {
   projectId: string | null;
   issueId?: string | null;
   assigneeId?: string | null;
+  issueUrl?: string | null;
   outcome: EventOutcome;
   reason: string | null;
   targets: EventTarget[];
 };
-export type EventResult = { outcome: EventOutcome; reason: string | null; targets: EventTarget[] };
-export type LoggedEvent = EventEntry & { id: number; receivedAt: string };
+// `mentions` holds display names only, never Slack ids. Omitted means no one was mentioned.
+export type EventResult = { outcome: EventOutcome; reason: string | null; targets: EventTarget[]; mentions?: string[] };
+// `mentions` is null on rows written before migration 4.
+export type LoggedEvent = EventEntry & { id: number; receivedAt: string; issueUrl: string | null; mentions: string[] | null };
 
 export type Store = {
   upsertChannel: (channel: Channel) => void;
@@ -78,6 +81,8 @@ const toEvent = (row: Row): LoggedEvent => ({
   projectId: row.project_id as string | null,
   issueId: row.issue_id as string | null,
   assigneeId: row.assignee_id as string | null,
+  issueUrl: row.issue_url as string | null,
+  mentions: row.mentions ? (JSON.parse(row.mentions as string) as string[]) : null,
   outcome: row.outcome as EventOutcome,
   reason: row.reason as string | null,
   targets: row.targets ? (JSON.parse(row.targets as string) as EventTarget[]) : [],
@@ -90,12 +95,12 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
   const begin = (entry: EventEntry): number | null => {
     const result = db
       .prepare(
-        `INSERT INTO event_log (delivery_id, received_at, kind, issue_identifier, issue_title, project_id, issue_id, assignee_id, outcome, reason, targets)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING`,
+        `INSERT INTO event_log (delivery_id, received_at, kind, issue_identifier, issue_title, project_id, issue_id, assignee_id, issue_url, outcome, reason, targets)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING`,
       )
       .run(
         entry.deliveryId, stamp(), entry.kind, entry.issueIdentifier, entry.issueTitle, entry.projectId,
-        entry.issueId ?? null, entry.assigneeId ?? null, entry.outcome, entry.reason, JSON.stringify(entry.targets),
+        entry.issueId ?? null, entry.assigneeId ?? null, entry.issueUrl ?? null, entry.outcome, entry.reason, JSON.stringify(entry.targets),
       );
     return Number(result.changes) === 1 ? Number(result.lastInsertRowid) : null;
   };
@@ -151,8 +156,8 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
     insertEvent: (entry) => begin(entry) !== null,
     beginEvent: begin,
     finishEvent: (id, result) => {
-      db.prepare("UPDATE event_log SET outcome = ?, reason = ?, targets = ? WHERE id = ?").run(
-        result.outcome, result.reason, JSON.stringify(result.targets), id,
+      db.prepare("UPDATE event_log SET outcome = ?, reason = ?, targets = ?, mentions = ? WHERE id = ?").run(
+        result.outcome, result.reason, JSON.stringify(result.targets), JSON.stringify(result.mentions ?? []), id,
       );
     },
     sweepInterrupted: (olderThanMs) =>
