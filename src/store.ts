@@ -3,6 +3,25 @@ import { foldText } from "./text.ts";
 
 const DEFAULT_RECENT_EVENTS = 50;
 const MAX_QUERY_CHARS = 100;
+const MAX_URL_CHARS = 2048;
+
+// Only Linear issue links are persisted, so a hostile payload cannot plant a javascript: or foreign link.
+const safeIssueUrl = (value: string | null | undefined): string | null => {
+  if (!value || value.length > MAX_URL_CHARS) return null;
+  try {
+    const { protocol, hostname } = new URL(value);
+    return protocol === "https:" && (hostname === "linear.app" || hostname.endsWith(".linear.app")) ? value : null;
+  } catch {
+    return null;
+  }
+};
+const parseJson = (value: unknown): unknown => {
+  try {
+    return typeof value === "string" ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+};
 
 export type Channel = { id: string; name: string; isMember: boolean };
 export type Project = { id: string; name: string };
@@ -82,10 +101,10 @@ const toEvent = (row: Row): LoggedEvent => ({
   issueId: row.issue_id as string | null,
   assigneeId: row.assignee_id as string | null,
   issueUrl: row.issue_url as string | null,
-  mentions: row.mentions ? (JSON.parse(row.mentions as string) as string[]) : null,
+  mentions: ((parsed) => (Array.isArray(parsed) && parsed.every((m) => typeof m === "string") ? (parsed as string[]) : null))(parseJson(row.mentions)),
   outcome: row.outcome as EventOutcome,
   reason: row.reason as string | null,
-  targets: row.targets ? (JSON.parse(row.targets as string) as EventTarget[]) : [],
+  targets: ((parsed) => (Array.isArray(parsed) ? (parsed as EventTarget[]) : []))(parseJson(row.targets)),
 });
 
 export const createStore = (db: DatabaseSync, now: () => number = Date.now): Store => {
@@ -100,7 +119,7 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
       )
       .run(
         entry.deliveryId, stamp(), entry.kind, entry.issueIdentifier, entry.issueTitle, entry.projectId,
-        entry.issueId ?? null, entry.assigneeId ?? null, entry.issueUrl ?? null, entry.outcome, entry.reason, JSON.stringify(entry.targets),
+        entry.issueId ?? null, entry.assigneeId ?? null, safeIssueUrl(entry.issueUrl), entry.outcome, entry.reason, JSON.stringify(entry.targets),
       );
     return Number(result.changes) === 1 ? Number(result.lastInsertRowid) : null;
   };

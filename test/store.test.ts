@@ -201,9 +201,11 @@ const seed = (store: ReturnType<typeof setup>["store"], rows: Partial<EventEntry
 
 test("recentEvents with q finds an old match beyond the newest 50, ignoring accents and case", () => {
   const { store } = setup();
-  seed(store, [{ issueIdentifier: "KAM-42", issueTitle: "Gestión de acceso" }]);
-  seed(store, Array.from({ length: 119 }, (_, i) => ({ issueIdentifier: `OTH-${i}`, issueTitle: "Other" })).map((r, i) => ({ ...r, deliveryId: `x${i}` })));
-  store.insertEvent(entry("late", { issueIdentifier: "OTH-late" }));
+  // The oldest of 120 rows, so it sits outside the newest 50.
+  seed(store, [
+    { issueIdentifier: "KAM-42", issueTitle: "Gestión de acceso" },
+    ...Array.from({ length: 119 }, (_, i) => ({ issueIdentifier: `OTH-${i}`, issueTitle: "Other" })),
+  ]);
   assert.equal(store.recentEvents().length, 50);
   assert.deepEqual(store.recentEvents(50, { q: "kam-42" }).map((e) => e.issueIdentifier), ["KAM-42"]);
   assert.equal(store.recentEvents(50, { q: "gestion" }).length, 1);
@@ -260,4 +262,32 @@ test("rows written before migration 4 read back with null issueUrl and mentions"
   db.prepare("INSERT INTO event_log (delivery_id, received_at, kind, outcome) VALUES ('old', '2026-01-01T00:00:00.000Z', 'created', 'notified')").run();
   const [row] = store.recentEvents();
   assert.deepEqual([row?.issueUrl, row?.mentions], [null, null]);
+});
+
+test("issue_url is stored only for https linear.app URLs within 2048 chars", () => {
+  const { store } = setup();
+  const stored = (url: string | null, i: number): string | null | undefined => {
+    store.insertEvent(entry(`url${i}`, { issueUrl: url }));
+    return store.recentEvents(1)[0]?.issueUrl;
+  };
+  const ok = "https://linear.app/kamai/issue/KAM-1/x";
+  assert.equal(stored(ok, 0), ok);
+  assert.equal(stored("https://sub.linear.app/a", 1), "https://sub.linear.app/a");
+  const bad = [
+    "javascript:alert(1)", "http://linear.app/a", "https://evil.com/a", "https://linear.app.evil.com/a",
+    "https://notlinear.app/a", "not a url", "", `https://linear.app/${"a".repeat(2048)}`,
+  ];
+  bad.forEach((url, i) => assert.equal(stored(url, i + 2), null, url.slice(0, 40)));
+});
+
+test("corrupted mentions and targets JSON reads back as null and empty instead of throwing", () => {
+  const { db, store } = setup();
+  const insert = db.prepare("INSERT INTO event_log (delivery_id, received_at, kind, outcome, targets, mentions) VALUES (?, ?, 'created', 'notified', ?, ?)");
+  insert.run("c1", "2026-01-01T00:00:00.000Z", "{oops", "[not json");
+  insert.run("c2", "2026-01-02T00:00:00.000Z", "[]", '{"a":1}');
+  insert.run("c3", "2026-01-03T00:00:00.000Z", "[]", '["ok", 5]');
+  insert.run("c4", "2026-01-04T00:00:00.000Z", "[]", '["ok","two"]');
+  const rows = store.recentEvents();
+  assert.deepEqual(rows.map((r) => r.mentions), [["ok", "two"], null, null, null]);
+  assert.deepEqual(rows[3]?.targets, []);
 });

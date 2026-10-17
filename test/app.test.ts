@@ -114,7 +114,7 @@ test("valid signed webhook posts to the linked channel and logs one notified row
       {
         id: 0, receivedAt: "", deliveryId: "d-1", kind: "created", issueIdentifier: "K-1", issueTitle: "T",
         projectId: "proj-1", issueId: "iss-1", assigneeId: null, outcome: "notified", reason: null,
-        targets: [{ channel: "C1", outcome: "notified" }], issueUrl: "https://l/K-1", mentions: [],
+        targets: [{ channel: "C1", outcome: "notified" }], issueUrl: null, mentions: [],
       },
     );
   });
@@ -237,6 +237,14 @@ test("no mentions are recorded when nothing was delivered", async () => {
     h.store.upsertPerson({ linearUserId: "u-beto", name: "Beto", email: null, slackUserId: "UBETO", matchSource: "manual" });
     await deliver(h, createdBody({ id: "u-beto" }).replace('"proj-1"', '"proj-other"'), "d-1");
     assert.deepEqual(h.store.recentEvents()[0]?.mentions, []);
+  });
+});
+
+test("the issue url is stored when it is a Linear link and dropped otherwise", async () => {
+  await withApp(async (h) => {
+    const linear = createdBody({ id: "u-beto" }).replace("https://l/K-1", "https://linear.app/kamai/issue/K-1/t");
+    await deliver(h, linear, "d-1");
+    assert.equal(h.store.recentEvents()[0]?.issueUrl, "https://linear.app/kamai/issue/K-1/t");
   });
 });
 
