@@ -78,3 +78,20 @@ test("verifySlackSignature rejects stale, future or malformed timestamps", () =>
   assert.equal(verifySlackSignature(body, undefined, slackSign(body, "x"), secret, now), false);
   assert.equal(verifySlackSignature(body, "abc", slackSign(body, "abc"), secret, now), false);
 });
+
+test("verifySlackSignature returns false for duplicated (array) headers instead of throwing", () => {
+  const now = 1_700_000_000_000;
+  const ts = String(now / 1000);
+  const sig = slackSign(body, ts);
+  assert.equal(verifySlackSignature(body, [ts, ts], sig, secret, now), false);
+  assert.equal(verifySlackSignature(body, ts, [sig, sig], secret, now), false);
+  assert.equal(verifySlackSignature(body, [ts], [sig], secret, now), false);
+});
+
+test("verifySlackSignature rejects odd-length hex and accepts uppercase hex", () => {
+  const now = 1_700_000_000_000;
+  const ts = String(now / 1000);
+  const sig = slackSign(body, ts);
+  assert.equal(verifySlackSignature(body, ts, sig.slice(0, -1), secret, now), false);
+  assert.equal(verifySlackSignature(body, ts, `v0=${sig.slice(3).toUpperCase()}`, secret, now), true);
+});

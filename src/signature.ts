@@ -19,14 +19,16 @@ const SLACK_MAX_AGE_S = 300;
 // Slack v0 scheme: HMAC-SHA256 over `v0:{timestamp}:{raw body}`, timestamp in seconds, 5-minute window.
 export const verifySlackSignature = (
   rawBody: string | Buffer,
-  timestamp: string | undefined,
-  signature: string | undefined,
+  timestamp: string | string[] | undefined,
+  signature: string | string[] | undefined,
   secret: string,
   now: number = Date.now(),
 ): boolean => {
-  if (!timestamp || !/^\d+$/.test(timestamp)) return false;
+  // Node gives string[] for duplicated headers; treat that as invalid.
+  if (typeof timestamp !== "string" || typeof signature !== "string") return false;
+  if (!/^\d+$/.test(timestamp)) return false;
   if (Math.abs(now / 1000 - Number(timestamp)) > SLACK_MAX_AGE_S) return false;
-  if (!signature?.startsWith("v0=")) return false;
+  if (!signature.startsWith("v0=")) return false;
   const hex = signature.slice(3);
   if (!/^[0-9a-f]+$/i.test(hex)) return false;
   const expected = createHmac("sha256", secret)
