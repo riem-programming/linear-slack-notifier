@@ -75,3 +75,8 @@ Mode: Strict TDD. Branch: `feat/kamaiti-75-http-config-signature` (base `origin/
 
 ### Status
 13/13 tasks of slices 1a and 1b complete. Slices 2a-6 remain. Suite 89/89, typecheck clean.
+
+### Post-review follow-ups (slice 1b)
+- `verifySlackSignature` now accepts `string | string[] | undefined` headers and returns false for arrays (duplicated headers); regression tests for array, odd-length hex and uppercase hex added. Suite 91/91.
+- `.env.example` documents the new env schema; legacy `SLACK_PROJECT_WEBHOOKS`/`SLACK_USER_MAP` removed from it only (README/OPERATIONS updated in slice 6).
+- OPS NOTE for slice 2b/6: the Dokploy volume mounted at `/data` must be writable by uid 1000 (`node`). Verify on first deploy; bind mounts are root-owned and will make DB open fail at startup.
