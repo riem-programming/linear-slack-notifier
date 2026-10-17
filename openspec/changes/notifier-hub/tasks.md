@@ -79,13 +79,13 @@ Checklist:
 - Linear ticket: "Base HTTP, configuracion y firma de Slack" - Extraer utilidades HTTP, definir el nuevo esquema de variables de entorno, verificar firmas de Slack y preparar el Dockerfile con volumen.
 
 Checklist:
-- [ ] 1b.1 RED `test/http.test.ts`: `parseForm`, `sendHtml`, `redirect` (303), `readBody` size limit (413).
-- [ ] 1b.2 RED `test/signature.test.ts`: `verifySlackSignature` valid, bad signature, stale timestamp (>5 min) (status-query: Bad signature, Stale timestamp).
-- [ ] 1b.3 RED `test/config.test.ts`: required secrets (`LINEAR_WEBHOOK_SECRET`, `LINEAR_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ADMIN_PASSWORD`), defaults (`DATABASE_PATH`, `BACKUP_DIR`, `BACKUP_KEEP`, `EVENT_LOG_RETENTION_DAYS`, `STATUS_TIME_ZONE=America/Lima`), legacy `SLACK_PROJECT_WEBHOOKS`/`SLACK_USER_MAP` ignored.
-- [ ] 1b.4 GREEN `src/http.ts` (move `readBody`, `send`, `parseJson` from `app.ts`; add new helpers), `src/signature.ts`, `src/config.ts`.
-- [ ] 1b.5 GREEN `src/app.ts`: route table only, ports via `AppOptions`; existing `test/app.test.ts` stays green (`/health`).
-- [ ] 1b.6 `src/server.ts`: open DB, migrate, build ports; `unref` retention/backup timers (daily + startup).
-- [ ] 1b.7 `Dockerfile`: `/data` owned by `node`, `ENV DATABASE_PATH=/data/notifier.db`, `--disable-warning=ExperimentalWarning` in `CMD`.
+- [x] 1b.1 RED `test/http.test.ts`: `parseForm`, `sendHtml`, `redirect` (303), `readBody` size limit (413).
+- [x] 1b.2 RED `test/signature.test.ts`: `verifySlackSignature` valid, bad signature, stale timestamp (>5 min) (status-query: Bad signature, Stale timestamp).
+- [x] 1b.3 RED `test/config.test.ts`: required secrets (`LINEAR_WEBHOOK_SECRET`, `LINEAR_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ADMIN_PASSWORD`), defaults (`DATABASE_PATH`, `BACKUP_DIR`, `BACKUP_KEEP`, `EVENT_LOG_RETENTION_DAYS`, `STATUS_TIME_ZONE=America/Lima`), legacy `SLACK_PROJECT_WEBHOOKS`/`SLACK_USER_MAP` ignored.
+- [x] 1b.4 GREEN `src/http.ts` (move `readBody`, `send`, `parseJson` from `app.ts`; add new helpers), `src/signature.ts`, `src/config.ts`.
+- [x] 1b.5 GREEN `src/app.ts`: route table only, ports via `AppOptions`; existing `test/app.test.ts` stays green (`/health`).
+- [x] 1b.6 `src/server.ts`: open DB, migrate, build ports; `unref` retention/backup timers (daily + startup).
+- [x] 1b.7 `Dockerfile`: `/data` owned by `node`, `ENV DATABASE_PATH=/data/notifier.db`, `--disable-warning=ExperimentalWarning` in `CMD`.
 - Verify: `pnpm test`, `pnpm typecheck`; manual `docker build .` if Docker available.
 
 ---

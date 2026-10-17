@@ -14,6 +14,32 @@ export const verifySignature = (
   return timingSafeEqual(received, expected);
 };
 
+const SLACK_MAX_AGE_S = 300;
+
+// Slack v0 scheme: HMAC-SHA256 over `v0:{timestamp}:{raw body}`, timestamp in seconds, 5-minute window.
+export const verifySlackSignature = (
+  rawBody: string | Buffer,
+  timestamp: string | string[] | undefined,
+  signature: string | string[] | undefined,
+  secret: string,
+  now: number = Date.now(),
+): boolean => {
+  // Node gives string[] for duplicated headers; treat that as invalid.
+  if (typeof timestamp !== "string" || typeof signature !== "string") return false;
+  if (!/^\d+$/.test(timestamp)) return false;
+  if (Math.abs(now / 1000 - Number(timestamp)) > SLACK_MAX_AGE_S) return false;
+  if (!signature.startsWith("v0=")) return false;
+  const hex = signature.slice(3);
+  if (!/^[0-9a-f]+$/i.test(hex)) return false;
+  const expected = createHmac("sha256", secret)
+    .update(`v0:${timestamp}:`)
+    .update(rawBody)
+    .digest();
+  const received = Buffer.from(hex, "hex");
+  if (received.length !== expected.length) return false;
+  return timingSafeEqual(received, expected);
+};
+
 export const isFresh = (
   webhookTimestamp: unknown,
   now: number = Date.now(),

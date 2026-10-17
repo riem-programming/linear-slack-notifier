@@ -1,7 +1,10 @@
 import { createApp } from "./app.ts";
-import { describeProjectRoutes, describeUserMap, loadConfig } from "./config.ts";
+import { loadConfig } from "./config.ts";
 import type { Config } from "./config.ts";
-import { createSlackRouter } from "./slack.ts";
+import { backup, openDb, pruneEventLog } from "./db.ts";
+import type { DatabaseSync } from "node:sqlite";
+
+const DAY_MS = 86_400_000;
 
 const readConfig = (): Config => {
   try {
@@ -12,14 +15,37 @@ const readConfig = (): Config => {
   }
 };
 
+const openDatabase = (path: string): DatabaseSync => {
+  try {
+    return openDb(path);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Cannot open database");
+    process.exit(1);
+  }
+};
+
+// Retention and backup run at startup and then daily. Failures are logged, never fatal.
+const startMaintenance = (db: DatabaseSync, config: Config): void => {
+  const run = (): void => {
+    try {
+      pruneEventLog(db, { retentionDays: config.eventLogRetentionDays });
+      backup(db, config.backupDir, { keep: config.backupKeep });
+    } catch (error) {
+      console.error(`Maintenance failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  };
+  run();
+  setInterval(run, DAY_MS).unref();
+};
+
 const start = (): void => {
   const config = readConfig();
-  console.info(describeUserMap(process.env.SLACK_USER_MAP, config.slackUserMap));
-  console.info(describeProjectRoutes(config.slackProjectWebhooks));
+  const db = openDatabase(config.databasePath);
+  startMaintenance(db, config);
+  // Notification routing moves to the database in a later slice; until then no channel is mapped.
   const server = createApp({
     secret: config.linearWebhookSecret,
-    userMap: config.slackUserMap,
-    resolveSlack: createSlackRouter(config.slackProjectWebhooks),
+    resolveSlack: () => null,
   });
 
   server.listen(config.port, () => {
@@ -28,7 +54,10 @@ const start = (): void => {
 
   const shutdown = (): void => {
     console.info("Shutting down");
-    server.close(() => process.exit(0));
+    server.close(() => {
+      db.close();
+      process.exit(0);
+    });
     setTimeout(() => process.exit(1), 10_000).unref();
   };
   process.on("SIGTERM", shutdown);

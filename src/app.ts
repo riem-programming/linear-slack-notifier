@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { analyzeEvent } from "./events.ts";
 import type { UserMap } from "./events.ts";
+import { BodyTooLargeError, parseJson, readBody, send } from "./http.ts";
 import { isFresh, verifySignature } from "./signature.ts";
 import type { SlackResolver } from "./slack.ts";
 
@@ -15,50 +16,6 @@ type AppOptions = {
 };
 
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
-
-class BodyTooLargeError extends Error {}
-
-const readBody = (req: IncomingMessage, maxBytes: number): Promise<Buffer> =>
-  new Promise((resolve, reject) => {
-    const declared = Number(req.headers["content-length"]);
-    if (Number.isFinite(declared) && declared > maxBytes) {
-      reject(new BodyTooLargeError());
-      return;
-    }
-    const chunks: Buffer[] = [];
-    let size = 0;
-    const onData = (chunk: Buffer): void => {
-      size += chunk.length;
-      if (size > maxBytes) {
-        req.off("data", onData);
-        req.pause();
-        reject(new BodyTooLargeError());
-        return;
-      }
-      chunks.push(chunk);
-    };
-    req.on("data", onData);
-    req.on("end", () => resolve(Buffer.concat(chunks)));
-    req.on("error", reject);
-  });
-
-const send = (
-  res: ServerResponse,
-  status: number,
-  body?: unknown,
-  headers: Record<string, string> = {},
-): void => {
-  res.writeHead(status, { "content-type": "application/json", ...headers });
-  res.end(body === undefined ? undefined : JSON.stringify(body));
-};
-
-const parseJson = (raw: string): unknown => {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-};
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : "unknown error";
