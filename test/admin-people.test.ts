@@ -109,6 +109,17 @@ test("sheet caps radios at 50, applies the query and explains an empty result", 
   assert.match(personSheetFragment(sheetView({ members: [] })).value, /No hay miembros disponibles/);
 });
 
+test("sheet a11y: fieldset with hidden legend, live region, id as label, paste open when nothing matches", () => {
+  const text = personSheetFragment(sheetView({ members: [member("UX1", "", { realName: "", handle: "", email: null })] })).value;
+  assert.match(text, /<fieldset[^>]*>\s*<legend class="sr-only">Cuenta de Slack<\/legend>/);
+  assert.match(text, /<div data-live-results aria-live="polite">/);
+  assert.match(text, /class="check-name">UX1</);
+  assert.doesNotMatch(text, /<details class="paste" open/);
+  const none = personSheetFragment(sheetView({ q: "zzz" })).value;
+  assert.match(none, /<details class="paste" open>/);
+  assert.match(personSheetFragment(sheetView({ members: [] })).value, /<details class="paste" open>/);
+});
+
 test("sheet with an unavailable Slack list shows the message and only the paste field", () => {
   const text = personSheetFragment(sheetView({ members: null })).value;
   assert.match(text, /No se pudo cargar la lista de Slack\. Pega el ID de miembro\./);

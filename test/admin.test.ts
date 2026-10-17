@@ -1259,8 +1259,21 @@ test("link POST: pasting works with Slack down, a pick does not, an unknown pers
     const pick = await linkPost(h, "u1", { member: "UANA1" });
     assert.equal(pick.headers.get("location"), "/admin/people?status=members-error");
     assert.equal(h.store.getPerson("u1")?.slackUserId, "ULUIS");
-    assert.equal((await linkPost(h, "ghost", { slack: "UPASTE1" })).headers.get("location"), "/admin/people?status=person-not-found");
   }, { users: async () => SEEDED_USERS, members: async () => { throw new Error("ratelimited"); } }));
+
+test("link POST: an unknown or inactive person is 404, changes nothing and never calls Slack", async () => {
+  let calls = 0;
+  await withApp(async (h) => {
+    seedPeople(h.store);
+    h.store.upsertPerson({ linearUserId: "old", name: "Vieja", email: null, slackUserId: null, matchSource: "unmatched", active: false });
+    for (const id of ["ghost", "old"]) {
+      assert.equal((await linkPost(h, id, { member: "UANA1" })).status, 404);
+      assert.equal((await linkPost(h, id, { slack: "UPASTE1" })).status, 404);
+    }
+    assert.equal(h.store.getPerson("old")?.slackUserId, null);
+    assert.equal(calls, 0);
+  }, { users: async () => SEEDED_USERS, members: async () => { calls += 1; return MEMBERS; } });
+});
 
 test("link POST enforces session, Origin and csrf and changes nothing when rejected", () =>
   withApp(async (h) => {

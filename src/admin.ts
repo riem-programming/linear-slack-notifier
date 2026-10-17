@@ -242,7 +242,9 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
   const personLink = async (res: ServerResponse, rawId: string, form: Record<string, string>): Promise<void> => {
     const back = (status: string): void => done(res, status, "people");
     const userId = safeDecode(rawId);
-    if (store.getPerson(userId)?.active === false) return back("person-not-found");
+    // Existence is checked before any Slack call.
+    const person = store.getPerson(userId);
+    if (!person || person.active === false) return send(res, 404, { error: "not found" }, SECURITY_HEADERS);
     let slackId = (form.slack ?? "").trim();
     if (slackId === "") {
       slackId = form.member ?? "";

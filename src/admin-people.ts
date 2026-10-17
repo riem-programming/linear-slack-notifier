@@ -66,7 +66,7 @@ export type PersonSheetView = {
 
 const memberRow = (member: SlackMember): Html => {
   const meta = [member.handle ? `@${member.handle}` : "", member.email ?? ""].filter(Boolean).join(" · ");
-  return html`<label class="check"><input type="radio" name="member" value="${member.id}"><span class="check-name">${member.displayName || member.realName || member.handle}</span>${meta ? html`<span class="muted">${meta}</span>` : ""}</label>`;
+  return html`<label class="check"><input type="radio" name="member" value="${member.id}"><span class="check-name">${member.displayName || member.realName || member.handle || member.id}</span>${meta ? html`<span class="muted">${meta}</span>` : ""}</label>`;
 };
 
 // The part admin.js swaps while the user types: the hint and the radio list.
@@ -76,14 +76,14 @@ const results = (members: SlackMember[], q: string): Html => {
   const hint = matches.length > shown.length ? html`<p class="muted">Mostrando ${shown.length} de ${matches.length}. Escribe para acotar la lista.</p>` : "";
   const list = shown.length ? insetList(shown.map(memberRow))
     : q ? emptyState(`No hay miembros que coincidan con «${q}»`) : emptyState("No hay miembros disponibles");
-  return html`<div data-live-results>${hint}${list}</div>`;
+  return html`<div data-live-results aria-live="polite"><fieldset class="fieldset"><legend class="sr-only">Cuenta de Slack</legend>${hint}${list}</fieldset></div>`;
 };
 
 const sheetContent = ({ person, members, csrf, q }: PersonSheetView): Html => {
   const href = linkHref(person);
   const who = html`<div class="who">${avatar(person.linearUserId, person.name)}<p class="who-text">${person.email ?? "Sin correo"} · elige su cuenta de Slack</p></div>`;
   const paste = members
-    ? html`<details class="paste"><summary>No aparece: pegar ID de miembro</summary><label for="slack-id">ID de miembro de Slack</label><input id="slack-id" name="slack" pattern="[UW][A-Z0-9]+" placeholder="U01ABC23DEF" autocomplete="off"></details>`
+    ? html`<details class="paste"${filterMembers(members, q, 1).length === 0 ? " open" : ""}><summary>No aparece: pegar ID de miembro</summary><label for="slack-id">ID de miembro de Slack</label><input id="slack-id" name="slack" pattern="[UW][A-Z0-9]+" placeholder="U01ABC23DEF" autocomplete="off"></details>`
     : html`<label for="slack-id">ID de miembro de Slack</label><input id="slack-id" name="slack" pattern="[UW][A-Z0-9]+" placeholder="U01ABC23DEF" autocomplete="off" required>`;
   const picker = members
     ? html`${searchForm(href, "sheet-q", "Buscar en Slack", q, "data-live")}`

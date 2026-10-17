@@ -11,6 +11,7 @@
   const load = async (url) => {
     if (busy) return;
     busy = true;
+    clearTimeout(timer);
     try {
       await fetchSheet(url);
     } finally {
@@ -64,6 +65,8 @@
       if (!next || !current) return;
       const picked = current.querySelector("input[name=member]:checked")?.value;
       current.replaceWith(next);
+      const paste = dialog.querySelector("details.paste");
+      if (paste && !next.querySelector("input[name=member]")) paste.open = true;
       for (const radio of next.querySelectorAll("input[name=member]")) radio.checked = radio.value === picked;
     } catch {
       // Keep the current results; the form still submits normally.
@@ -82,6 +85,8 @@
   });
 
   dialog.addEventListener("close", () => {
+    clearTimeout(timer);
+    latest += 1;
     dialog.replaceChildren();
     if (opener instanceof HTMLElement) opener.focus();
   });

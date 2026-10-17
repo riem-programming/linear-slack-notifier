@@ -175,3 +175,4 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
 .paste { margin: 12px 0 0; }
 .paste summary { cursor: pointer; color: var(--accent); min-height: 32px; }
 .paste input { display: block; width: 100%; margin-top: 6px; }
+.fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
