@@ -61,7 +61,11 @@ export const openDb = (path: string): DatabaseSync => {
   try {
     db = new DatabaseSync(path);
     db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
-    db.exec("PRAGMA journal_mode = WAL");
+    const { journal_mode: mode } = db.prepare("PRAGMA journal_mode = WAL").get() as { journal_mode: string };
+    // In-memory databases cannot use WAL; for files, silently running without it risks lock errors and unsafe backups.
+    if (path !== ":memory:" && mode.toLowerCase() !== "wal") {
+      throw new Error(`WAL journal mode is not available (got "${mode}")`);
+    }
     db.exec("PRAGMA foreign_keys = ON");
     migrate(db);
     return db;
