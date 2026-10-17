@@ -183,5 +183,11 @@ Completed: 4b.1, 4b.2, 4b.3, 4b.4, plus deferred 4a.2 and the old route removal.
 - Search on the channels page is a GET `?q=` filter by name (cut to 100 chars, `foldText`).
 - The sheet search is also a GET; with a filter active, linked projects that are hidden travel as hidden inputs, so saving never unlinks them. Without JS, unsaved checkbox changes are lost when searching (a full reload).
 - `admin.js` (about 45 lines): delegated click on `a[data-sheet]`, fetch with `X-Admin-Fragment: 1`, one `<dialog>`, `showModal()`, closes via `[data-close]`, backdrop click and native Esc, focus to the search field and back to the opener; a redirect (session ended), non-2xx or fetch error falls back to `location.href`. It has no browser test (no DOM test infra); a manual JS ON/OFF check on staging is required, as tasks.md states.
-- Chip remove is a POST to `/admin/channels/:id/projects` with the remaining ids (flash "Proyectos del canal guardados."). Flash keys `linked`, `unlinked`, `exists`, `not-found` were removed with their routes. `store.link/unlink` remain in the store.
+- Chip remove is a POST to `/admin/channels/:id/projects/:projectId/remove` (see review follow-up; the first version posted a snapshot of the remaining ids). Flash keys `linked`, `unlinked`, `exists`, `not-found` were removed with their routes. `store.link/unlink` remain in the store.
 - The sheet fragment reuses the `sheet` component, so it keeps its "Cerrar" link next to Cancelar/Guardar.
+
+### Review follow-up on slice 4b
+- Chip removal is `POST /admin/channels/:id/projects/:projectId/remove` (`store.unlink` of one pair, flash "Proyecto quitado del canal."), so no snapshot race. Refresh and chip removal carry a non-empty `q` in their redirect.
+- In the dialog the project search filters rows on the client (`data-fold`), so unsaved checkbox changes survive; the no-JS GET `?q=` path is unchanged. The sheet "Cerrar" link has `data-close`; `load()` ignores clicks while a fetch is in flight; the sheet response sends `Vary: X-Admin-Fragment`.
+- Project ids are not format-checked on removal (Linear ids are UUIDs); they must exist in the store.
+- Tests: `pnpm test` 391/391, `pnpm typecheck` clean.
