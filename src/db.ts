@@ -29,6 +29,12 @@ export const migrations: readonly string[] = [
     reason TEXT, targets TEXT);
   CREATE INDEX event_log_received_at ON event_log(received_at);
   `,
+  // Issue and assignee ids let the route suppress an `assigned` notice that duplicates a `created` one.
+  `
+  ALTER TABLE event_log ADD COLUMN issue_id TEXT;
+  ALTER TABLE event_log ADD COLUMN assignee_id TEXT;
+  CREATE INDEX event_log_issue ON event_log(issue_id, kind);
+  `,
 ];
 
 const userVersion = (db: DatabaseSync): number => {

@@ -13,7 +13,7 @@ const slackIds: Record<string, string> = { "u-ana": "UANA", "u-luis": "ULUIS" };
 const lookup: PersonLookup = (id) => (slackIds[id] ? { slackUserId: slackIds[id], name: null } : null);
 
 const notice = (kind: NoticeKind, extra: Partial<IssueNotice> = {}): IssueNotice => ({
-  kind, actor: ana, creator: ana, assignee: luis,
+  kind, actor: ana, creator: ana, assignee: luis, issueId: "i-42",
   identifier: "KAMAITI-42", title: "Diseñar landing", url, projectId: "p", ...extra,
 });
 const render = (n: IssueNotice, find: PersonLookup = lookup) => renderNotice(n, planMentions(n, find));

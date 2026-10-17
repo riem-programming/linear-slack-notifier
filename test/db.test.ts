@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { backup, migrate, migrations, openDb, pruneEventLog } from "../src/db.ts";
 
 const withTempDir = (run: (dir: string) => void): void => {
@@ -184,4 +184,16 @@ test("a failed backup keeps the previous same-day snapshot and leaves no temp fi
     assert.deepEqual(snapshot.prepare("SELECT name FROM projects").all().map((r) => ({ ...r })), [{ name: "Web" }]);
     snapshot.close();
   });
+});
+
+test("migration 2 adds issue and assignee ids to event_log and keeps existing rows", () => {
+  const db = new DatabaseSync(":memory:");
+  assert.equal(migrate(db, migrations.slice(0, 1)), 1);
+  insertEvent(db, "old", "2026-03-30T00:00:00.000Z");
+  assert.equal(migrate(db), migrations.length);
+  const columns = (db.prepare("PRAGMA table_info(event_log)").all() as { name: string }[]).map((c) => c.name);
+  assert.ok(columns.includes("issue_id") && columns.includes("assignee_id"));
+  assert.deepEqual(deliveryIds(db), ["old"]);
+  assert.equal(migrations.length, 2);
+  db.close();
 });
