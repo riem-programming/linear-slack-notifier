@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { assertNoInlineCode } from "./helpers/csp.ts";
 import { html } from "../src/html.ts";
 import { avatar, button, emptyState, flash, insetList, pill, sectionHeader, segmented, sheet } from "../src/ui.ts";
 import { icon } from "../src/icons.ts";
@@ -24,7 +25,7 @@ const outputs = (): string[] => [
 test("component output is escaped, has no inline style, no inline handlers and no emoji", () => {
   for (const out of outputs()) {
     assert.doesNotMatch(out, /<img/);
-    assert.doesNotMatch(out, /<[^>]*\s(style|on[a-z]+)=|<style/i);
+    assertNoInlineCode(out);
     assert.doesNotMatch(out, EMOJI);
   }
 });

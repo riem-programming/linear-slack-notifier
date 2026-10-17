@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { assertNoInlineCode } from "./helpers/csp.ts";
 import { html } from "../src/html.ts";
 import { bare, shell } from "../src/layout.ts";
 
@@ -30,7 +31,7 @@ test("shell links versioned assets and carries no inline style or script", () =>
   const page = shell(base).value;
   assert.match(page, /<link rel="stylesheet" href="\/admin\/assets\/admin\.css\?v=[0-9a-f]{10}">/);
   assert.match(page, /<script src="\/admin\/assets\/admin\.js\?v=[0-9a-f]{10}" defer><\/script>/);
-  assert.doesNotMatch(page, /<[^>]*\s(style|on[a-z]+)=|<style/i);
+  assertNoInlineCode(page);
 });
 
 test("shell shows the escaped env label only when set, plus the time zone", () => {
@@ -52,4 +53,10 @@ test("bare renders a centered page without the sidebar", () => {
   assert.match(page, /<title>Error &lt;x&gt; · Notifier Hub<\/title>/);
   assert.match(page, /<p>fallo<\/p>/);
   assert.doesNotMatch(page, /class="sidebar"|\sstyle=|<style/);
+});
+
+test("shell has a skip link to the main content", () => {
+  const page = shell(base).value;
+  assert.match(page, /<a href="#main" class="skip-link">Saltar al contenido<\/a>/);
+  assert.match(page, /<main class="content" id="main">/);
 });

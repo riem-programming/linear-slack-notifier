@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { assertNoInlineCode } from "./helpers/csp.ts";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.ts";
 import { csrfToken } from "../src/auth.ts";
@@ -168,7 +169,7 @@ test("every admin page renders in the shell without inline styles, style tags or
     for (const path of paths) {
       const text = await (await fetch(`${base}${path}`, { headers: auth() })).text();
       assert.match(text, /class="sidebar"/, path);
-      assert.doesNotMatch(text, /<[^>]*\s(style|on[a-z]+)=|<style/i, path);
+      assertNoInlineCode(text, path);
     }
   }, { projects: async () => [{ id: "p1", name: "Proyecto" }], users: async () => [{ id: "u1", name: "Ana", email: "ana@x.com", active: true }] }));
 

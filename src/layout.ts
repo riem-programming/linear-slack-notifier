@@ -44,13 +44,14 @@ export const shell = ({ title, current, envLabel, timeZone, body, logoutCsrf }: 
 <html lang="es">
 ${head(title)}
 <body>
+<a href="#main" class="skip-link">Saltar al contenido</a>
 <div class="app">
 <aside class="sidebar">
 <div class="app-tile"><span class="app-icon">${icon("app")}</span><div class="app-name"><strong>Notifier Hub</strong><span>Linear → Slack</span></div></div>
 <nav aria-label="Principal" class="nav">${links}</nav>
 <div class="sidebar-foot">${envLabel ? html`<span class="env-label">${envLabel}</span>` : ""}<span class="tz">Zona horaria: ${timeZone}</span>${logout}</div>
 </aside>
-<main class="content">
+<main class="content" id="main">
 <h1 class="large-title">${title}</h1>
 ${body}
 </main>

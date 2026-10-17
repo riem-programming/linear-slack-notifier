@@ -89,7 +89,7 @@ const eventRow = (event: LoggedEvent, timeZone: string, channelName: (id: string
 <td>${formatTime(event.receivedAt, timeZone)}</td>
 <td>${KINDS[event.kind] ?? event.kind}</td>
 <td>${issue}</td>
-<td>${pill(OUTCOME_TONES[event.outcome] ?? "neutral", OUTCOMES[event.outcome] ?? event.outcome)}</td>
+<td>${pill(Object.hasOwn(OUTCOME_TONES, event.outcome) ? OUTCOME_TONES[event.outcome] as Tone : "neutral", OUTCOMES[event.outcome] ?? event.outcome)}</td>
 <td>${reason}</td>
 <td>${targets}</td>
 </tr>`;
@@ -197,7 +197,7 @@ const personRow = (person: Person, csrf: string): Html => {
   return html`<tr data-person>
 <td>${person.name}</td>
 <td>${person.email ?? html`<span class="muted">—</span>`}</td>
-<td>${pill(SOURCE_TONES[person.matchSource], SOURCES[person.matchSource])}</td>
+<td>${pill(Object.hasOwn(SOURCE_TONES, person.matchSource) ? SOURCE_TONES[person.matchSource] : "neutral", SOURCES[person.matchSource])}</td>
 <td>${person.slackUserId ? html`<code>${person.slackUserId}</code>` : html`<span class="muted">—</span>`}</td>
 <td>${setForm}${clearForm}</td>
 </tr>`;
