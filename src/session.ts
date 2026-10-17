@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { safeEqual } from "./auth.ts";
 
-export type Session = { iat: number; exp: number }; // seconds
+export type Session = { iat: number; exp: number; pf: string }; // seconds; pf is the password binding
 
 export const SESSION_COOKIE = "nh_session";
 export const SESSION_MAX_AGE_S = 8 * 60 * 60;
@@ -17,6 +17,7 @@ const passwordFingerprint = (secret: string, password: string): string =>
   hmac(secret, `pw:${password}`).subarray(0, 16).toString("hex");
 
 export const signSession = (secret: string, password: string, nowMs: number): string => {
+  if (!secret || !password) throw new Error("signSession needs a non-empty secret and password");
   const iat = Math.floor(nowMs / 1000);
   const payload = Buffer.from(
     JSON.stringify({ v: 1, iat, exp: iat + SESSION_MAX_AGE_S, pf: passwordFingerprint(secret, password) }),
@@ -32,6 +33,7 @@ export const verifySession = (
   password: string,
   nowMs: number,
 ): Session | null => {
+  if (!secret || !password) return null;
   if (typeof value !== "string" || value.length > MAX_VALUE_LENGTH) return null;
   const parts = value.split(".");
   if (parts.length !== 2) return null;
@@ -49,12 +51,12 @@ export const verifySession = (
   const now = nowMs / 1000;
   if (now >= exp || iat > now + MAX_IAT_SKEW_S || exp - iat > SESSION_MAX_AGE_S) return null;
   if (!safeEqual(pf, passwordFingerprint(secret, password))) return null;
-  return { iat, exp };
+  return { iat, exp, pf };
 };
 
-// Bound to the session's issue time: stable while it lasts, different for the next login.
+// Bound to the whole session (issue time, expiry and password binding): stable while it lasts, different for any other.
 export const csrfFor = (secret: string, session: Session): string =>
-  hmac(secret, `csrf:${session.iat}`).toString("hex");
+  hmac(secret, `csrf:${session.iat}:${session.exp}:${session.pf}`).toString("hex");
 
 const COOKIE_ATTRIBUTES = "HttpOnly; Secure; SameSite=Strict; Path=/admin";
 
@@ -72,7 +74,8 @@ export const readCookie = (header: string | string[] | undefined, name: string):
   return null;
 };
 
-const NEXT_PATTERN = /^\/admin(\/[A-Za-z0-9/_-]*)?(\?[^#\s\\]*)?$/;
+// Path: no empty segments (so no `//`). Query: printable ASCII except `#` and `\`.
+const NEXT_PATTERN = /^\/admin(\/[A-Za-z0-9_-]+)*\/?(\?[\x21\x22\x24-\x5b\x5d-\x7e]*)?$/;
 const NEXT_EXCLUDED = new Set(["/admin/login", "/admin/logout"]);
 
 // A fixed-prefix allow-list cannot yield `//host` or backslash tricks, unlike parsing with `new URL`.

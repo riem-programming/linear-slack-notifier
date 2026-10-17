@@ -30,7 +30,7 @@ const good = { v: 1, iat, exp: iat + HOUR, pf: pf(PW) };
 
 test("signSession roundtrips and expires after 8 hours", () => {
   const value = signSession(SECRET, PW, NOW);
-  assert.deepEqual(verifySession(value, SECRET, PW, NOW + 1000), { iat, exp: iat + 8 * HOUR });
+  assert.deepEqual(verifySession(value, SECRET, PW, NOW + 1000), { iat, exp: iat + 8 * HOUR, pf: pf(PW) });
   assert.ok(verifySession(value, SECRET, PW, NOW + 8 * HOUR * 1000 - 1));
   assert.equal(verifySession(value, SECRET, PW, NOW + 8 * HOUR * 1000), null);
 });
@@ -73,12 +73,49 @@ test("verifySession rejects wrong types, version, structure and oversized values
   assert.equal(verifySession(forge({ ...good, pad: "x".repeat(600) }), SECRET, PW, NOW), null);
 });
 
-test("csrfFor is stable per session and differs per iat and secret", () => {
-  const a = csrfFor(SECRET, { iat: 100, exp: 200 });
+test("csrfFor is stable per session and differs per iat, exp, password binding and secret", () => {
+  const base = { iat: 100, exp: 200, pf: "aa" };
+  const a = csrfFor(SECRET, base);
   assert.match(a, /^[0-9a-f]{64}$/);
-  assert.equal(a, csrfFor(SECRET, { iat: 100, exp: 999 }));
-  assert.notEqual(a, csrfFor(SECRET, { iat: 101, exp: 200 }));
-  assert.notEqual(a, csrfFor("t".repeat(32), { iat: 100, exp: 200 }));
+  assert.equal(a, csrfFor(SECRET, { ...base }));
+  assert.notEqual(a, csrfFor(SECRET, { ...base, iat: 101 }));
+  assert.notEqual(a, csrfFor(SECRET, { ...base, exp: 201 }));
+  assert.notEqual(a, csrfFor(SECRET, { ...base, pf: "bb" }));
+  assert.notEqual(a, csrfFor("t".repeat(32), base));
+});
+
+test("two sessions issued in the same second with different bindings get different tokens", () => {
+  const one = verifySession(signSession(SECRET, "pw-one", NOW), SECRET, "pw-one", NOW) as NonNullable<ReturnType<typeof verifySession>>;
+  const two = verifySession(signSession(SECRET, "pw-two", NOW), SECRET, "pw-two", NOW) as NonNullable<ReturnType<typeof verifySession>>;
+  assert.notEqual(csrfFor(SECRET, one), csrfFor(SECRET, two));
+});
+
+test("empty secret or password is refused on both sides", () => {
+  assert.throws(() => signSession("", PW, NOW));
+  assert.throws(() => signSession(SECRET, "", NOW));
+  const value = signSession(SECRET, PW, NOW);
+  assert.equal(verifySession(value, "", PW, NOW), null);
+  assert.equal(verifySession(value, SECRET, "", NOW), null);
+  const emptyPw = createHmac("sha256", SECRET).update("pw:").digest().subarray(0, 16).toString("hex");
+  assert.equal(verifySession(forge({ ...good, pf: emptyPw }), SECRET, "", NOW), null);
+});
+
+test("a __proto__ payload with a valid MAC is rejected without side effects", () => {
+  const p = b64('{"__proto__":{"polluted":true},"v":1}');
+  assert.equal(verifySession(`${p}.${mac(p)}`, SECRET, PW, NOW), null);
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
+  const withProto = b64(`{"__proto__":{"x":1},"v":1,"iat":${iat},"exp":${iat + HOUR},"pf":"${pf(PW)}"}`);
+  assert.deepEqual(verifySession(`${withProto}.${mac(withProto)}`, SECRET, PW, NOW), { iat, exp: iat + HOUR, pf: pf(PW) });
+  assert.equal(({} as Record<string, unknown>).x, undefined);
+});
+
+test("a non-canonical base64url payload keeps the MAC over the exact text it was signed as", () => {
+  const p = b64(JSON.stringify(good));
+  assert.ok(verifySession(`${p}.${mac(p)}`, SECRET, PW, NOW));
+  // Padded variant decodes to the same JSON, but the MAC covers the text, so it is rejected unless re-signed.
+  assert.equal(verifySession(`${p}==.${mac(p)}`, SECRET, PW, NOW), null);
+  const padded = `${p}==`;
+  assert.ok(verifySession(`${padded}.${mac(padded)}`, SECRET, PW, NOW));
 });
 
 test("safeNext allows only admin paths and falls back to /admin/status", () => {
@@ -96,6 +133,14 @@ test("safeNext allows only admin paths and falls back to /admin/status", () => {
     "/admin/../x",
     "/admin/status#frag",
     "/admin/a b",
+    "/admin//login",
+    "/admin//status",
+    "/admin/status?q=\x00",
+    "/admin/status?q=\x7f",
+    "/admin/status?q=€",
+    "/admin/status?q=a\\b",
+    "/admin/status?q=a\nb",
+    "/admin/status?q=a b",
     "/other",
     "",
   ];
