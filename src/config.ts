@@ -11,6 +11,7 @@ export type Config = {
   eventLogRetentionDays: number;
   statusTimeZone: string;
   adminEnvLabel: string | null;
+  sessionSecret: string | null;
 };
 
 type Env = Record<string, string | undefined>;
@@ -44,6 +45,14 @@ const ENV_LABEL_MAX = 40;
 
 const envLabel = (env: Env): string | null => env.ADMIN_ENV_LABEL?.trim().slice(0, ENV_LABEL_MAX) || null;
 
+const SESSION_SECRET_MIN_BYTES = 32;
+
+// A missing or short secret does not stop boot: the admin stays disabled (fails closed) and webhooks keep working.
+const sessionSecret = (env: Env): string | null => {
+  const value = env.SESSION_SECRET?.trim();
+  return value && Buffer.byteLength(value) >= SESSION_SECRET_MIN_BYTES ? value : null;
+};
+
 // SLACK_PROJECT_WEBHOOKS and SLACK_USER_MAP are legacy: they are never read here, so a stale value cannot break startup.
 export const loadConfig = (env: Env = process.env): Config => ({
   linearWebhookSecret: required(env, "LINEAR_WEBHOOK_SECRET"),
@@ -58,4 +67,5 @@ export const loadConfig = (env: Env = process.env): Config => ({
   eventLogRetentionDays: integer(env, "EVENT_LOG_RETENTION_DAYS", 30, 1),
   statusTimeZone: timeZone(env, "America/Lima"),
   adminEnvLabel: envLabel(env),
+  sessionSecret: sessionSecret(env),
 });

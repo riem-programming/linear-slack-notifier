@@ -78,10 +78,10 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(auth): add signed session and login rate limiter primitives`
 - Linear ticket: "Admin: sesión firmada y limitador de intentos" - Funciones puras para firmar/verificar sesión, CSRF, redirección segura y límite de intentos de login.
 - Files: `src/session.ts`, `src/ratelimit.ts`, `test/session.test.ts`, `test/ratelimit.test.ts`.
-- [ ] 2a.1 RED: session tests: roundtrip; tampered MAC/payload; expired; `iat` > now+60s; `exp-iat` > 8h; wrong `pf` after password change; value > 512 chars; not 2 parts; wrong types.
-- [ ] 2a.2 RED: `csrfFor` stable per session, differs per `iat`; `safeNext` table (`//host`, `\`, `/admin/login`, `/admin/logout`, valid query); cookie strings (A3 attributes, `Max-Age=0`); `readCookie`.
-- [ ] 2a.3 RED: limiter: 5th failure allowed, 6th attempt blocked; `retryAfterS`; global 30 cap; window slide; `succeed`; `maxKeys` pruning; `clientIp` (last XFF entry, fallback, `"unknown"`).
-- [ ] 2a.4 GREEN: implement `session.ts` and `ratelimit.ts`; export `safeEqual` use as needed (no change to `auth.ts` yet).
+- [x] 2a.1 RED: session tests: roundtrip; tampered MAC/payload; expired; `iat` > now+60s; `exp-iat` > 8h; wrong `pf` after password change; value > 512 chars; not 2 parts; wrong types.
+- [x] 2a.2 RED: `csrfFor` stable per session, differs per `iat`; `safeNext` table (`//host`, `\`, `/admin/login`, `/admin/logout`, valid query); cookie strings (A3 attributes, `Max-Age=0`); `readCookie`.
+- [x] 2a.3 RED: limiter: 5th failure allowed, 6th attempt blocked; `retryAfterS`; global 30 cap; window slide; `succeed`; `maxKeys` pruning; `clientIp` (last XFF entry, fallback, `"unknown"`).
+- [x] 2a.4 GREEN: implement `session.ts` and `ratelimit.ts`; export `safeEqual` use as needed (no change to `auth.ts` yet).
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: no visible change (nothing wired). Confirm staging still works as before.
 - USER prerequisites: none.

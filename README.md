@@ -27,6 +27,7 @@ Unassignments are ignored. If one update both assigns and completes an issue, on
 | --- | --- | --- |
 | `LINEAR_WEBHOOK_SECRET` | yes | Linear webhook signing secret |
 | `SLACK_PROJECT_WEBHOOKS` | yes | JSON object mapping Linear project UUID to Slack Incoming Webhook URL, see below |
+| `SESSION_SECRET` | for the admin | At least 32 bytes, used to sign admin sessions. Generate with `openssl rand -hex 32`. Missing or shorter: the admin answers 403 and the service still boots |
 | `PORT` | no | HTTP port, default `3000` |
 | `SLACK_USER_MAP` | no | JSON object mapping Linear user ID to Slack member ID, see below |
 
