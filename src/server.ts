@@ -51,6 +51,8 @@ const start = (): void => {
   const server = createApp({
     secret: config.linearWebhookSecret,
     store,
+    adminPassword: config.adminPassword,
+    timeZone: config.statusTimeZone,
     slack: createSlackApi({ token: config.slackBotToken }),
   });
 

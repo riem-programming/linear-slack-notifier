@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { createAdmin, isAdminPath } from "./admin.ts";
 import { classifyEvent } from "./events.ts";
 import type { Ignored, IssueNotice } from "./events.ts";
 import { BodyTooLargeError, headerValue, parseJson, readBody, send } from "./http.ts";
@@ -13,6 +14,9 @@ type AppOptions = {
   secret: string;
   store: Store;
   slack: Pick<SlackApi, "postMessage">;
+  // Unset or empty keeps the admin UI disabled (deny, never open).
+  adminPassword?: string | undefined;
+  timeZone?: string;
   maxBodyBytes?: number;
   now?: () => number;
   // Runs work after the HTTP ack. Production schedules it on the event loop; tests collect and await it.
@@ -31,6 +35,8 @@ export const createApp = ({
   secret,
   store,
   slack,
+  adminPassword,
+  timeZone = "America/Lima",
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   now = Date.now,
   defer,
@@ -147,8 +153,14 @@ export const createApp = ({
     runLater(() => processEvent(payload, deliveryId));
   };
 
+  const admin = createAdmin({ store, password: adminPassword, timeZone, logger });
+
   return createServer((req, res) => {
-    const path = (req.url ?? "").split("?")[0];
+    const path = (req.url ?? "").split("?")[0] ?? "";
+    if (isAdminPath(path)) {
+      void admin(req, res, path);
+      return;
+    }
     if (req.method === "GET" && path === "/health") {
       send(res, 200, { status: "ok" });
       return;
