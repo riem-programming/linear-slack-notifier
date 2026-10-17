@@ -1,4 +1,5 @@
 import type { IssueNotice, Person } from "./events.ts";
+import type { EventOutcome, EventTarget } from "./store.ts";
 
 export type PersonRecord = { slackUserId: string | null; name: string | null };
 export type PersonLookup = (linearUserId: string) => PersonRecord | null;
@@ -66,4 +67,37 @@ export const renderNotice = (notice: IssueNotice, plan: MentionPlan): string | n
     case "canceled":
       return `${plan.actor} canceló ${link} 🚫: ${title}${cc}`;
   }
+};
+
+export type RouteResult = { outcome: EventOutcome; reason: string | null; targets: EventTarget[] };
+
+export type RouteDeps = {
+  channelsFor: (projectId: string) => { id: string }[];
+  post: (channel: string, text: string) => Promise<void>;
+};
+
+const MAX_ERROR_LENGTH = 200;
+
+/** Posts to every channel linked to the project. A failing channel never blocks the others. */
+export const routeNotice = async (
+  notice: { projectId: string | null; text: string },
+  { channelsFor, post }: RouteDeps,
+): Promise<RouteResult> => {
+  if (!notice.projectId) return { outcome: "skipped", reason: "no-project", targets: [] };
+  const channels = channelsFor(notice.projectId);
+  if (channels.length === 0) return { outcome: "skipped", reason: "project-not-linked", targets: [] };
+
+  const targets = await Promise.all(
+    channels.map(async ({ id }): Promise<EventTarget> => {
+      try {
+        await post(id, notice.text);
+        return { channel: id, outcome: "notified" };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown error";
+        return { channel: id, outcome: "failed", error: message.slice(0, MAX_ERROR_LENGTH) };
+      }
+    }),
+  );
+  const failed = targets.some((target) => target.outcome === "failed");
+  return { outcome: failed ? "failed" : "notified", reason: failed ? "post-failed" : null, targets };
 };

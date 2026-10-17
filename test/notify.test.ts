@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planMentions, renderNotice } from "../src/notify.ts";
+import { planMentions, renderNotice, routeNotice } from "../src/notify.ts";
 import type { PersonLookup } from "../src/notify.ts";
 import type { IssueNotice, NoticeKind } from "../src/events.ts";
 
@@ -97,4 +97,42 @@ test("escapes mrkdwn control characters in title and identifier, only & in the u
   const text = render(n);
   assert.equal(text, "Ana Gómez creó <https://l/x?a=1&amp;b=2|K&lt;1&gt;>: &lt;!channel&gt; deploy");
   assert.ok(!text.includes("<!channel>"));
+});
+
+const channels = [{ id: "C1" }, { id: "C2" }];
+const route = (post: (channel: string, text: string) => Promise<void>, projectId: string | null = "p", linked = channels) =>
+  routeNotice({ projectId, text: "hola" }, { channelsFor: () => linked, post });
+
+test("routeNotice skips an issue without a project and never posts", async () => {
+  const sent: string[] = [];
+  const result = await route(async (c) => void sent.push(c), null);
+  assert.deepEqual(result, { outcome: "skipped", reason: "no-project", targets: [] });
+  assert.deepEqual(sent, []);
+});
+
+test("routeNotice skips a project without linked channels", async () => {
+  const result = await route(async () => {}, "p", []);
+  assert.deepEqual(result, { outcome: "skipped", reason: "project-not-linked", targets: [] });
+});
+
+test("routeNotice posts to every linked channel and records each target", async () => {
+  const sent: string[] = [];
+  const result = await route(async (c, t) => void sent.push(`${c}:${t}`));
+  assert.deepEqual(sent, ["C1:hola", "C2:hola"]);
+  assert.deepEqual(result, {
+    outcome: "notified", reason: null,
+    targets: [{ channel: "C1", outcome: "notified" }, { channel: "C2", outcome: "notified" }],
+  });
+});
+
+test("routeNotice reports failed with per-target errors when one channel fails and still posts to the rest", async () => {
+  const result = await route(async (c) => {
+    if (c === "C1") throw new Error("not_in_channel");
+  });
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.reason, "post-failed");
+  assert.deepEqual(result.targets, [
+    { channel: "C1", outcome: "failed", error: "not_in_channel" },
+    { channel: "C2", outcome: "notified" },
+  ]);
 });
