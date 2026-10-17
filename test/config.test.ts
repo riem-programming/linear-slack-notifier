@@ -25,6 +25,7 @@ test("loads required secrets and applies defaults", () => {
     statusTimeZone: "America/Lima",
     adminEnvLabel: null,
     sessionSecret: null,
+    slackCommandName: "/estado",
   });
 });
 
@@ -88,4 +89,17 @@ test("sessionSecret is null when unset or shorter than 32 bytes", () => {
   assert.equal(loadConfig({ ...base, SESSION_SECRET: "é".repeat(15) }).sessionSecret, null);
   assert.equal(loadConfig({ ...base, SESSION_SECRET: "  " + "x".repeat(32) + "\n" }).sessionSecret, "x".repeat(32));
   assert.equal(loadConfig({ ...base, SESSION_SECRET: " " + "x".repeat(31) + " " }).sessionSecret, null);
+});
+
+test("slackCommandName defaults to /estado and accepts a valid override", () => {
+  assert.equal(loadConfig(base).slackCommandName, "/estado");
+  assert.equal(loadConfig({ ...base, SLACK_COMMAND_NAME: "/estado-proyecto-dev" }).slackCommandName, "/estado-proyecto-dev");
+  assert.equal(loadConfig({ ...base, SLACK_COMMAND_NAME: "/Estado_1" }).slackCommandName, "/Estado_1");
+  assert.equal(loadConfig({ ...base, SLACK_COMMAND_NAME: "" }).slackCommandName, "/estado");
+});
+
+test("rejects an invalid SLACK_COMMAND_NAME, naming the variable", () => {
+  for (const value of ["estado", "/", "/with space", "/<!channel>", `/${"a".repeat(33)}`]) {
+    assert.throws(() => loadConfig({ ...base, SLACK_COMMAND_NAME: value }), /SLACK_COMMAND_NAME/);
+  }
 });

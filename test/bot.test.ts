@@ -17,7 +17,7 @@ const snap = (id: string): ProjectSnapshot => ({
   issues: [{ identifier: `${id}-1`, url: "", title: "T", dueDate: null, completedAt: null, state: { name: "Todo", type: "unstarted", position: 1 }, assignee: null, milestoneId: null }],
 });
 
-const setup = (options: { linearFails?: boolean; link?: string[] } = {}) => {
+const setup = (options: { linearFails?: boolean; link?: string[]; commandName?: string } = {}) => {
   const store = createStore(openDb(":memory:"));
   store.upsertChannel({ id: "C1", name: "general", isMember: true });
   for (const p of projects) store.upsertProject(p);
@@ -38,6 +38,7 @@ const setup = (options: { linearFails?: boolean; link?: string[] } = {}) => {
       postEphemeral: async (channel, user, text, thread) => void out.push(`eph|${channel}|${user}|${thread ?? ""}|${text}`),
       respond: async (_url, text, visibility) => void out.push(`${visibility}|${text}`),
     },
+    commandName: options.commandName ?? "/estado",
     now: () => NOW, timeZone: "America/Lima", logger: { warn: (line: string) => void logs.push(line) },
   });
   return { bot, out, logs };
@@ -60,7 +61,7 @@ test("no argument in a linked channel posts one block per project in name order,
 test("no argument in an unlinked channel returns ephemeral help with the project list", async () => {
   const { bot, out } = setup();
   await bot.command(cmd("  "));
-  assert.match(out[0] as string, /^ephemeral\|Este canal no tiene proyectos vinculados\. Usá \/estado \[proyecto\]\./);
+  assert.match(out[0] as string, /^ephemeral\|Este canal no tiene proyectos vinculados\. Usa \/estado \[proyecto\]\./);
   for (const p of projects) assert.ok((out[0] as string).includes(p.name.replace("&", "&amp;")));
 });
 
@@ -87,7 +88,7 @@ test("project names and the typed text are escaped in replies", async () => {
 test("a Linear failure replies with a readable ephemeral error and logs no secret", async () => {
   const { bot, out, logs } = setup({ linearFails: true });
   await bot.command(cmd("web"));
-  assert.equal(out[0], "ephemeral|No pude consultar Linear en este momento. Probá de nuevo en unos minutos.");
+  assert.equal(out[0], "ephemeral|No pude consultar Linear en este momento. Prueba de nuevo en unos minutos.");
   assert.ok(!out[0]?.includes("500"));
   assert.ok(logs.some((l) => l.includes("Linear responded with status 500")));
 });
@@ -135,11 +136,23 @@ test("an ephemeral reply to a mention inside a thread keeps the thread", async (
 test("help names the slash command that was used, falling back to /estado", async () => {
   const dev = setup();
   await dev.bot.command(cmd("", "C2", "/estado-dev"));
-  assert.ok((dev.out[0] as string).includes("Usá /estado-dev [proyecto]."));
+  assert.ok((dev.out[0] as string).includes("Usa /estado-dev [proyecto]."));
   const odd = setup();
   await odd.bot.command(cmd("", "C2", "/x <!channel>"));
-  assert.ok((odd.out[0] as string).includes("Usá /estado [proyecto]."));
+  assert.ok((odd.out[0] as string).includes("Usa /estado [proyecto]."));
   const mention = setup();
   await mention.bot.mention({ text: "<@UBOT>", channel: "C2", user: "U1" });
-  assert.ok((mention.out[0] as string).includes("Usá /estado [proyecto]."));
+  assert.ok((mention.out[0] as string).includes("Usa /estado [proyecto]."));
+});
+
+test("the configured command name is used in mention help and as the slash-command fallback", async () => {
+  const mention = setup({ commandName: "/estado-proyecto" });
+  await mention.bot.mention({ text: "<@UBOT>", channel: "C2", user: "U1" });
+  assert.ok((mention.out[0] as string).includes("Usa /estado-proyecto [proyecto]."));
+  const fallback = setup({ commandName: "/estado-proyecto" });
+  await fallback.bot.command(cmd("", "C2", "/x <!channel>"));
+  assert.ok((fallback.out[0] as string).includes("Usa /estado-proyecto [proyecto]."));
+  const echoed = setup({ commandName: "/estado-proyecto" });
+  await echoed.bot.command(cmd("", "C2", "/estado-proyecto-dev"));
+  assert.ok((echoed.out[0] as string).includes("Usa /estado-proyecto-dev [proyecto]."));
 });

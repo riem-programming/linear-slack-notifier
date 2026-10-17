@@ -38,7 +38,7 @@ features:
     display_name: notificaciones
     always_online: true
   slash_commands:
-    - command: /estado
+    - command: /estado-proyecto-dev   # staging; use /estado-proyecto in production
       url: https://<host>/slack/commands
       description: Project status
       usage_hint: "[project]"
@@ -75,6 +75,7 @@ Rules:
 - Do **not** add `chat:write.public`. The bot must be invited to every linked channel: `/invite @notificaciones`.
 - Keep **token rotation off**. The service uses one long-lived bot token.
 - Copy **Bot User OAuth Token** to `SLACK_BOT_TOKEN` and **Signing Secret** to `SLACK_SIGNING_SECRET`.
+- Set `SLACK_COMMAND_NAME` to the slash command registered in the manifest (`/estado-proyecto-dev` in staging, `/estado-proyecto` in production). `/estado` is already taken in the workspace. The value is used in help replies and the `@bot` mention help.
 - Reinstall the app after any scope or command change.
 - Slack verifies the Events URL when you save it, so the service must already be deployed (see Troubleshooting).
 
@@ -110,7 +111,8 @@ The container runs as user `node` (uid 1000), so `/data` must be writable by uid
 |--|---------|------------|
 | Branch | `develop` | `main` |
 | Slack app | `notificaciones-dev` | `notificaciones` |
-| Slash command | `/estado-dev` | `/estado` |
+| Slash command | `/estado-proyecto-dev` | `/estado-proyecto` |
+| `SLACK_COMMAND_NAME` | `/estado-proyecto-dev` | `/estado-proyecto` |
 | Database | own volume | own volume |
 | Secrets | own set | own set |
 | Linked channels | `#test` only | real channels |

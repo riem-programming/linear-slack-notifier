@@ -62,7 +62,7 @@ const start = (): void => {
     slack,
     linear,
     slackSigningSecret: config.slackSigningSecret,
-    bot: createBot({ store, linear, slack, now: Date.now, timeZone: config.statusTimeZone, logger: console }),
+    bot: createBot({ store, linear, slack, now: Date.now, timeZone: config.statusTimeZone, commandName: config.slackCommandName, logger: console }),
   });
 
   server.listen(config.port, () => {

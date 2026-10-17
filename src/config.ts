@@ -12,6 +12,7 @@ export type Config = {
   statusTimeZone: string;
   adminEnvLabel: string | null;
   sessionSecret: string | null;
+  slackCommandName: string;
 };
 
 type Env = Record<string, string | undefined>;
@@ -53,6 +54,16 @@ const sessionSecret = (env: Env): string | null => {
   return value && Buffer.byteLength(value) >= SESSION_SECRET_MIN_BYTES ? value : null;
 };
 
+export const SLACK_COMMAND_PATTERN = /^\/[a-z0-9_-]{1,32}$/i;
+
+const slackCommandName = (env: Env): string => {
+  const value = env.SLACK_COMMAND_NAME || "/estado";
+  if (!SLACK_COMMAND_PATTERN.test(value)) {
+    throw new Error("Invalid SLACK_COMMAND_NAME: must look like /estado (1-32 letters, digits, - or _ after the slash)");
+  }
+  return value;
+};
+
 // SLACK_PROJECT_WEBHOOKS and SLACK_USER_MAP are legacy: they are never read here, so a stale value cannot break startup.
 export const loadConfig = (env: Env = process.env): Config => ({
   linearWebhookSecret: required(env, "LINEAR_WEBHOOK_SECRET"),
@@ -68,4 +79,5 @@ export const loadConfig = (env: Env = process.env): Config => ({
   statusTimeZone: timeZone(env, "America/Lima"),
   adminEnvLabel: envLabel(env),
   sessionSecret: sessionSecret(env),
+  slackCommandName: slackCommandName(env),
 });
