@@ -146,3 +146,18 @@ Completed: 3b.1, 3b.2, 3b.3. Remaining: slices 4a through 5b.
 - `groupByDay`/`dayBefore` never throw on an invalid `now` or `received_at`; undated rows form one "Sin fecha" group at the end.
 - External issue links carry a visually hidden "(se abre en una pestaña nueva)" (`.sr-only`).
 - Tests: hostile `q` stays quoted in the field and escaped in the empty state; whitespace-only `q` is no search. `pnpm test` 367/367, `pnpm typecheck` clean.
+
+## Batch 7: Slice 4a (branch `feat/kamaiti-99-channel-projects-save`, stacked on slice 3b, Linear KAMAITI-99)
+
+Completed: 4a.1, 4a.3 (POST part), 4a.4 (store and POST). Deferred to 4b: 4a.2 (GET sheet page) and removal of `/admin/channels/link`. Remaining: slices 4b through 5b.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 4a.1 | `test/store.test.ts` | Store (in-memory DB) | 367 existing | Written, 4 failed (method missing) | 371/371 | add and remove with counts; unchanged and duplicate ids no-op; empty list unlinks all; other channels untouched; rollback on FK failure mid-diff and connection reusable afterwards | None needed |
+| 4a.3 | `test/admin.test.ts` | App (ephemeral port) | 371 existing | Written, 5 failed | 377/377, typecheck clean | diff saved and 303 `channel-saved` flash rendered; dedupe; empty list; unknown project, unknown channel, malformed percent escape, encoded slash, lowercase id, empty project id all 400 with nothing changed; 201 projects 400; bad csrf, empty csrf, cross-origin, missing Origin 403, no session 401; store throw gives 500 with no leak and unchanged links | None needed |
+
+### Notes and deviations
+- `POST /admin/channels/:id/projects` reads repeated `project` fields via `URLSearchParams.getAll`; `readForm` now returns the `URLSearchParams` and callers derive the record with `parseForm`. Validation (id format `^[A-Z0-9]{1,32}$` after safe decode, channel exists, at most 200 unique projects, every project exists) runs before the single transaction.
+- Old `/admin/channels/link` and `/unlink` routes and the old Canales UI are untouched (4b replaces them).
+- The GET sheet page (4a.2) was out of the requested scope for this batch and moves to 4b.

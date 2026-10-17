@@ -141,10 +141,10 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(admin): add atomic channel project save and sheet routes`
 - Linear ticket: "Admin: guardado atómico de proyectos por canal" - Ruta de hoja por canal con checklist de proyectos y guardado en una sola operación con diff de vínculos.
 - Files: `src/store.ts`, `src/admin-channels.ts`, `src/admin.ts`, `test/store.test.ts`, `test/admin.test.ts`.
-- [ ] 4a.1 RED: `setChannelProjects`: adds, removes, unchanged no-op, other channels untouched, rollback on storage error, returns `{linked, unlinked}`.
-- [ ] 4a.2 RED: `GET /admin/channels/:id/projects` renders pre-checked list, "También en #x" hint, 404 for unknown channel, redirects to login with `next`, escapes id.
-- [ ] 4a.3 RED: `POST` same URL: CSRF required, repeated `project`, max 200, unknown project or channel 400 with nothing changed, 303 with flash; chip unlink via `/admin/channels/unlink`; `/admin/channels/link` removed.
-- [ ] 4a.4 GREEN: implement store method, sheet handlers, `URLSearchParams` parsing (U13).
+- [x] 4a.1 RED: `setChannelProjects`: adds, removes, unchanged no-op, other channels untouched, rollback on storage error, returns `{linked, unlinked}`.
+- [ ] 4a.2 (deferred to 4b, with the sheet UI) RED: `GET /admin/channels/:id/projects` renders pre-checked list, "También en #x" hint, 404 for unknown channel, redirects to login with `next`, escapes id.
+- [x] 4a.3 (POST part done; chip unlink route kept, `/admin/channels/link` removal moves to 4b) RED: `POST` same URL: CSRF required, repeated `project`, max 200, unknown project or channel 400 with nothing changed, 303 with flash; chip unlink via `/admin/channels/unlink`; `/admin/channels/link` removed.
+- [x] 4a.4 GREEN (store method and POST handler; GET sheet with 4b): implement store method, sheet handlers, `URLSearchParams` parsing (U13).
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: open `/admin/channels/<id>/projects` directly; check several projects and save; unchecking removes the link; saving unchanged does nothing; a tampered project id returns 400. The old Canales list may still show the old select until 4b.
 - USER prerequisites: none.
