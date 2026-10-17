@@ -117,3 +117,37 @@ Slice 2a: 5/5 tasks complete (18/18 across 1a, 1b, 2a counting 1a=6, 1b=7). Slic
 - `app.ts`: no logging for non-Issue payloads; Issue events log `Issue event: kind= actor= actor_mapped= assignee= assignee_mapped=` and `Issue event ignored: action= reason=`.
 - New app tests with ids `__proto__`, `constructor`, `toString` prove the `Object.hasOwn` guard.
 - Suite 95/95, typecheck clean.
+
+## Batch 4 - Slice 2b (Delivery: Slack client, routing, event_log, webhook route)
+
+Mode: Strict TDD. Branch: `feat/kamaiti-77-slack-delivery-event-log` (base `origin/develop`, 1a+1b+2a merged). Linear: KAMAITI-77.
+
+### Completed
+- [x] 2b.1 RED/GREEN `test/slack.test.ts` + `createSlackApi.postMessage` (bearer token, ok:false -> Slack error code, non-JSON status error, one 429 retry when Retry-After <= 5s)
+- [x] 2b.2a RED/GREEN single-notice rule (D10) via the event log: `store.hasNotifiedCreate(issueId, assigneeId)`; skipped `assigned-at-create`
+- [x] 2b.2 RED/GREEN `routeNotice` (no-project, project-not-linked, per-target outcomes, overall failed `post-failed`)
+- [x] 2b.3 RED/GREEN `test/app.test.ts` rewritten (401 no row, ack before work, one row per delivery, redelivery dedupe, unclassified, no secrets in rows)
+- [x] 2b.4 GREEN `src/slack.ts` (legacy webhook client/router removed), `routeNotice` in `src/notify.ts`
+- [x] 2b.5 GREEN `src/app.ts` route + `src/server.ts` wiring
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| migration 2 + store | `test/db.test.ts`, `test/store.test.ts`, `test/events.test.ts` | Unit | 95/95 baseline | Failed (`beginEvent`/`hasNotifiedCreate` missing, issueId absent) | 98/98 | v1 DB with rows upgrades; begin dup -> null; created/notified/assignee/issue variants | `insertEvent` now delegates to shared `begin` |
+| 2b.1 | `test/slack.test.ts` | Unit (fake fetch) | 98/98 | Failed (export missing) | Passed | ok:false, 502 non-JSON, 429 short, 429 long, 429 twice | Clean |
+| 2b.2 | `test/notify.test.ts` | Unit | 98/98 | Failed (export missing) | Passed | no-project, not-linked, two channels, one fails | Clean |
+| headerValue | `test/http.test.ts` | Unit | 98/98 | Failed (export missing) | 108/108 | string, empty, undefined, array | Clean |
+| 2b.2a, 2b.3, 2b.5 | `test/app.test.ts` | Integration (ephemeral server, fake slack, collecting defer) | 108/108 (old app tests replaced) | 14 failing | 110/110 | same/different assignee, no prior created, redelivery, no delivery id, unresolvable assignee, DB mentions | Clean |
+
+### Deviations from design/tasks
+- Delivery claim: `beginEvent` inserts the row first as `failed`/`in-flight` (outcome column has no pending state) and `finishEvent` updates it, so a crash mid-post leaves an honest `failed` row. `insertEvent` kept for tests.
+- `hasNotifiedCreate` requires the earlier `created` row to be `notified`: if the created notice never reached Slack (skipped/failed), a later assigned notice is NOT suppressed.
+- Added `defer` to `AppOptions` now (D7); production default is `setImmediate` + error logging, so `server.ts` does not pass it. Slice 4b only reuses it.
+- `AppOptions` still takes `secret` (not the whole `Config`); later slices widen it when they need more config.
+- `delivery_id` comes only from the `Linear-Delivery` header (not signed by Linear's HMAC; the 60s freshness window bounds replay). Missing/repeated header -> null id, event is still processed and logged (no dedupe).
+- Reason codes: `no-project`, `project-not-linked`, `assigned-at-create`, `assignee-not-resolvable`, `post-failed`, `internal-error`, `in-flight`; ignored events keep the classifier text (e.g. `not a notifiable event`) with kind `unclassified`.
+- Old compact diagnostics (`actor_mapped=...`) dropped; replaced by `Event processed: kind= outcome= reason=` plus the event log.
+- Size: 552 additions + 257 deletions (~809 changed excl. openspec), above the ~400 budget (tests ~60%, ~250 deletions are replaced legacy tests/code). Natural boundaries are the three feature commits.
+
+### Status
+Slice 2b: 6/6 tasks complete (24/24 across 1a, 1b, 2a, 2b). Slices 3a-6 remain. Suite 110/110, typecheck clean.

@@ -123,12 +123,12 @@ Checklist:
 - Linear ticket: "Entrega de avisos por bot de Slack y bitacora" - Publicar avisos con el bot de Slack en los canales vinculados, registrar cada evento con su resultado y evitar duplicados por reenvio.
 
 Checklist:
-- [ ] 2b.1 RED `test/slack.test.ts` (fake `fetch`): `postMessage` throws on `ok:false` with reason, one retry on 429 with `Retry-After <= 5s`, request carries bearer token.
-- [ ] 2b.2a RED single-notice rule (D10): `assigned` is suppressed (skipped, `assigned-at-create`) only when `event_log` already has a `created` notice for the same issue id and same assignee id; a different assignee or no prior `created` still notifies. Requires storing issue id and assignee id with the log entry.
-- [ ] 2b.2 RED routing tests: no `projectId` -> skipped `no-project`; no linked channel -> skipped `project-not-linked`; two channels, one fails -> per-target outcomes, overall `failed` (Slack API failure).
-- [ ] 2b.3 RED `test/app.test.ts`: invalid signature -> 401 and no log row; valid -> 200 ack, one `event_log` row per delivery; redelivery with same `Linear-Delivery` not posted twice (insert before post); unrecognized event logged as `unclassified`/`skipped`; no secrets in rows.
-- [ ] 2b.4 GREEN `src/slack.ts` (`createSlackApi`, webhook client removed), `routeNotice` in `src/notify.ts`.
-- [ ] 2b.5 GREEN `src/app.ts` `POST /webhooks/linear`: verify -> ack -> classify -> route -> log; wire in `src/server.ts`.
+- [x] 2b.1 RED `test/slack.test.ts` (fake `fetch`): `postMessage` throws on `ok:false` with reason, one retry on 429 with `Retry-After <= 5s`, request carries bearer token.
+- [x] 2b.2a RED single-notice rule (D10): `assigned` is suppressed (skipped, `assigned-at-create`) only when `event_log` already has a `created` notice for the same issue id and same assignee id; a different assignee or no prior `created` still notifies. Requires storing issue id and assignee id with the log entry.
+- [x] 2b.2 RED routing tests: no `projectId` -> skipped `no-project`; no linked channel -> skipped `project-not-linked`; two channels, one fails -> per-target outcomes, overall `failed` (Slack API failure).
+- [x] 2b.3 RED `test/app.test.ts`: invalid signature -> 401 and no log row; valid -> 200 ack, one `event_log` row per delivery; redelivery with same `Linear-Delivery` not posted twice (insert before post); unrecognized event logged as `unclassified`/`skipped`; no secrets in rows.
+- [x] 2b.4 GREEN `src/slack.ts` (`createSlackApi`, webhook client removed), `routeNotice` in `src/notify.ts`.
+- [x] 2b.5 GREEN `src/app.ts` `POST /webhooks/linear`: verify -> ack -> classify -> route -> log; wire in `src/server.ts`.
 - Verify: `pnpm test`, `pnpm typecheck`; manual on staging (after merge and auto-deploy): create/assign/complete/cancel a test issue in a project linked to `#test` (linking via DB is not possible yet; seed through slice 3b UI, so full manual validation happens after 3b).
 
 ---
