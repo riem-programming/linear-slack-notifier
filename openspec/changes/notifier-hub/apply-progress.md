@@ -39,3 +39,39 @@ Mode: Strict TDD. Branch: `feat/1a-persistence-db-store` (base `origin/develop`)
 | `backup` does `VACUUM INTO <target>.tmp` then `renameSync`; temp removed on failure; previous same-day snapshot survives (closed-db failure injection); UTC comment added | `test/db.test.ts` | Failed before change (old backup lost) | Passed |
 
 Suite: 89/89 pass, typecheck clean. Delivery: single PR with `size:exception` (user-approved).
+
+## Batch 2 - Slice 1b (Foundation: http, config, signature, Docker)
+
+Mode: Strict TDD. Branch: `feat/kamaiti-75-http-config-signature` (base `origin/develop`, 1a merged). Linear: KAMAITI-75.
+
+### Completed
+- [x] 1b.1 RED/GREEN `test/http.test.ts` + `src/http.ts` (parseForm, parseJson, send, sendHtml, redirect 303, readBody 413)
+- [x] 1b.2 RED/GREEN `test/signature.test.ts` + `verifySlackSignature` (valid, bad, stale, future, malformed)
+- [x] 1b.3 RED/GREEN `test/config.test.ts` + `src/config.ts` (new required secrets, defaults, legacy vars ignored)
+- [x] 1b.4 GREEN http/signature/config modules
+- [x] 1b.5 `src/app.ts` now imports helpers from `http.ts`; `test/app.test.ts` unchanged and green
+- [x] 1b.6 `src/server.ts` opens DB, daily + startup prune/backup (unref'd interval), closes DB on shutdown
+- [x] 1b.7 `Dockerfile`: `/data` + `/data/backups` owned by `node`, `ENV DATABASE_PATH=/data/notifier.db`, `--disable-warning=ExperimentalWarning`
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 1b.1 | `test/http.test.ts` | Unit/integration (ephemeral server) | 89/89 baseline | Written (module missing) | Passed | limit ok vs over, declared vs streamed | Clean |
+| 1b.2 | `test/signature.test.ts` | Unit | 89/89 baseline | Failed (export missing) | Passed | bad sig x5 forms, stale/future/edge/malformed ts | Clean |
+| 1b.3 | `test/config.test.ts` | Unit | 89/89 baseline | Failed (legacy parse threw) | Passed | each secret missing, overrides, invalid numerics and tz | Clean |
+| 1b.4 | covered above | - | - | - | Passed | - | Clean |
+| 1b.5 | `test/app.test.ts` (existing) | Integration | green | n/a (pure move) | Passed | n/a | Helpers moved, no logic change |
+| 1b.6 | none (composition root) | - | - | - | typecheck + container smoke | - | - |
+| 1b.7 | none (Dockerfile) | - | - | - | `docker build` ok; container started, no errors | - | - |
+
+### Deviations from design/tasks
+- `src/app.ts` keeps the legacy `secret`/`resolveSlack`/`userMap` AppOptions (ports-via-AppOptions refactor is deferred to 2b, which rewrites the route). Keeps `test/app.test.ts` green unchanged.
+- Legacy env vars are no longer parsed, so `server.ts` passes `resolveSlack: () => null`: develop/staging do not deliver notifications between 1b and 2b (webhooks are verified, acked and logged as "not mapped"). Production runs `main`, unaffected until cutover.
+- New required secrets (`LINEAR_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `ADMIN_PASSWORD`) make the develop build fail fast without them; per design these are set on the staging service (2b) and prod (6) before deploy.
+- WAL assertion added in `openDb` for file DBs (carry-over). The failure branch is not unit-testable (needs a filesystem without WAL); success path is covered by the existing WAL test.
+- No `VOLUME` instruction in Dockerfile: the volume is attached by Dokploy.
+- `README.md` / `docs/OPERATIONS.md` still describe legacy env vars; update deferred to slice 6.
+- Size: 342 additions + 197 deletions (~539 changed, ~130 deletions are the replaced legacy config tests/code), above the ~400 budget.
+
+### Status
+13/13 tasks of slices 1a and 1b complete. Slices 2a-6 remain. Suite 89/89, typecheck clean.
