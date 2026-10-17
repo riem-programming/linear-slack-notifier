@@ -20,6 +20,7 @@ type AppOptions = {
   linear?: Partial<Pick<LinearApi, "listProjects" | "listUsers">>;
   // Unset or empty keeps the admin UI disabled (deny, never open).
   adminPassword?: string | undefined;
+  adminEnvLabel?: string | null | undefined;
   // Slack inbound routes (/slack/events, /slack/commands) exist only when both are provided.
   slackSigningSecret?: string | undefined;
   bot?: Bot | undefined;
@@ -44,6 +45,7 @@ export const createApp = ({
   slack,
   linear,
   adminPassword,
+  adminEnvLabel,
   slackSigningSecret,
   bot,
   timeZone = "America/Lima",
@@ -227,7 +229,7 @@ export const createApp = ({
     ["/slack/commands", handleSlackCommand],
   ]);
 
-  const admin = createAdmin({ store, slack, linear, password: adminPassword, timeZone, logger });
+  const admin = createAdmin({ store, slack, linear, password: adminPassword, timeZone, logger, envLabel: adminEnvLabel ?? null });
 
   return createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";

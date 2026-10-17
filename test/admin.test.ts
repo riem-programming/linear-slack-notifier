@@ -22,6 +22,7 @@ type Options = {
   projects?: () => Promise<{ id: string; name: string }[]>;
   users?: () => Promise<{ id: string; name: string; email: string | null; active: boolean }[]>;
   lookup?: (email: string) => Promise<string | null>;
+  envLabel?: string | null;
 };
 
 const withApp = async (run: (h: Harness) => Promise<void>, options: Options = {}): Promise<void> => {
@@ -37,7 +38,7 @@ const withApp = async (run: (h: Harness) => Promise<void>, options: Options = {}
     },
     linear: { listProjects: options.projects ?? (async () => []), listUsers: options.users ?? (async () => []) },
     adminPassword: "adminPassword" in options ? options.adminPassword : PASSWORD,
-    timeZone: "America/Lima", logger,
+    timeZone: "America/Lima", logger, adminEnvLabel: options.envLabel ?? null,
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const port = (server.address() as AddressInfo).port;
@@ -143,6 +144,46 @@ test("assets are served without credentials, before auth, with cache headers", (
     assert.equal((await fetch(`${base}/admin/assets/admin.css`, { method: "POST" })).status, 401);
   }));
 
+test("asset 200 and 404 responses carry the admin security headers without losing their cache policy", () =>
+  withApp(async ({ base }) => {
+    const ok = await fetch(`${base}/admin/assets/admin.css?v=x`);
+    const missing = await fetch(`${base}/admin/assets/nope.css`);
+    for (const res of [ok, missing]) {
+      assert.equal(res.headers.get("content-security-policy"), CSP);
+      assert.equal(res.headers.get("x-frame-options"), "DENY");
+      assert.equal(res.headers.get("referrer-policy"), "same-origin");
+    }
+    assert.equal(ok.headers.get("cache-control"), "no-cache");
+    assert.equal(missing.headers.get("cache-control"), "no-store");
+  }));
+
+test("every admin page renders in the shell without inline styles, style tags or inline handlers", () =>
+  withApp(async ({ base, store }) => {
+    store.upsertChannel({ id: "C1", name: "general", isMember: false });
+    store.upsertProject({ id: "p1", name: "Proyecto" });
+    store.upsertPerson({ linearUserId: "u1", name: "Ana", email: "ana@x.com", slackUserId: null, matchSource: "unmatched" });
+    seedEvent(store);
+    seedEvent(store, { outcome: "failed", reason: "post-failed", targets: [{ channel: "C1", outcome: "failed", error: "boom" }] });
+    const paths = ["/admin/status", "/admin/status?all=1", "/admin/channels", "/admin/channels?status=linked", "/admin/people", "/admin/people?status=invalid-slack-id"];
+    for (const path of paths) {
+      const text = await (await fetch(`${base}${path}`, { headers: auth() })).text();
+      assert.match(text, /class="sidebar"/, path);
+      assert.doesNotMatch(text, /<[^>]*\s(style|on[a-z]+)=|<style/i, path);
+    }
+  }, { projects: async () => [{ id: "p1", name: "Proyecto" }], users: async () => [{ id: "u1", name: "Ana", email: "ana@x.com", active: true }] }));
+
+test("the shell shows the env label only when configured, and the time zone", () =>
+  withApp(async ({ base }) => {
+    const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
+    assert.match(text, /<span class="env-label">Staging<\/span>/);
+    assert.match(text, /America\/Lima/);
+  }, { envLabel: "Staging" }));
+
+test("the shell hides the env label when it is not configured", () =>
+  withApp(async ({ base }) => {
+    assert.doesNotMatch(await (await fetch(`${base}/admin/status`, { headers: auth() })).text(), /env-label/);
+  }));
+
 test("assets answer 403 when the admin is disabled", () =>
   withApp(async ({ base }) => {
     assert.equal((await fetch(`${base}/admin/assets/admin.css`)).status, 403);
@@ -198,7 +239,7 @@ test("status escapes hostile titles, reasons and channel errors", () =>
       targets: [{ channel: "<i>C</i>", outcome: "failed", error: "<svg onload=1>" }],
     });
     const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
-    assert.doesNotMatch(text, /<script>alert|<b>K|<img src|<i>C|<b>canal|<svg/);
+    assert.doesNotMatch(text, /<script>alert|<b>K|<img src|<i>C|<b>canal|<svg onload/);
     assert.match(text, /#&lt;b&gt;canal&lt;\/b&gt;/);
     assert.match(text, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   }));
@@ -279,7 +320,7 @@ test("channels page lists channels with linked projects, membership labels and l
     assert.match(text, /#test/);
     assert.match(text, /#ventas/);
     assert.match(text, /El bot participa/);
-    assert.match(text, /Invite al bot al canal/);
+    assert.match(text, /Invita al bot al canal/);
     assert.equal((text.match(/action="\/admin\/channels\/unlink"/g) ?? []).length, 2);
     // C2 has no links yet: it offers both projects; C1 has nothing left to link.
     assert.equal((text.match(/action="\/admin\/channels\/link"/g) ?? []).length, 1);
