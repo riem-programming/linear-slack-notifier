@@ -95,10 +95,10 @@ The system MUST acknowledge a slash command within 3 seconds with an immediate H
 
 ### Requirement: Summary content
 
-A project summary SHALL contain: (1) issue counts by state using Linear's state names as-is; (2) the count completed in the last 7 days; (3) overdue issues and issues due this week, each with identifier, title, person name, and due date; (4) the active milestone with progress percentage and done/total. The summary MUST NOT contain Slack mentions; people appear by plain name, or "Sin asignar" when unassigned.
+A project summary SHALL contain: (1) issue counts by state using Linear's state names as-is; (2) the count completed in the last 7 days; (3) overdue issues and issues due in the next 7 days (today through today+6 inclusive, in the status time zone), each with identifier, title, person name, and due date; (4) the active milestone with progress percentage and done/total. The summary MUST NOT contain Slack mentions; people appear by plain name, or "Sin asignar" when unassigned.
 
 #### Scenario: All four sections
-- GIVEN a project with issues, one overdue, two due this week, and an active milestone at 16/25
+- GIVEN a project with issues, one overdue, two due in the next 7 days, and an active milestone at 16/25
 - WHEN the summary is built
 - THEN all four sections appear, including "64% (16/25)" for the milestone
 
@@ -108,7 +108,7 @@ A project summary SHALL contain: (1) issue counts by state using Linear's state 
 - THEN assignees appear as plain names with no `<@...>` tokens
 
 #### Scenario: Empty sections
-- GIVEN a project with no overdue issues, none due this week, and no active milestone
+- GIVEN a project with no overdue issues, none due in the next 7 days, and no active milestone
 - WHEN the summary is built
 - THEN those sections are omitted or shown as empty, never as an error
 

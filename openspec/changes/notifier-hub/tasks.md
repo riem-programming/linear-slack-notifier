@@ -207,7 +207,7 @@ Checklist:
 
 Checklist:
 - [x] 4a.1 RED `test/linear.test.ts`: `projectSnapshot` paginated issues capped at 1,000, 60s cache (repeated queries make one request), query shape.
-- [x] 4a.2 RED `test/status.test.ts`: `summarizeProject` with fixed `today`/tz (`America/Lima`): states ordered by `position`, completed in 7 days, overdue, due this week (today to Sunday), active milestone % (completed / non-canceled), lists capped at 10 with "+N mas", no mentions, empty sections omitted.
+- [x] 4a.2 RED `test/status.test.ts`: `summarizeProject` with fixed `today`/tz (`America/Lima`): states ordered by `position`, completed in 7 days, overdue, due in the next 7 days (today through today+6), active milestone % (completed / non-canceled), lists capped at 10 with "+N mas", no mentions, empty sections omitted.
 - [x] 4a.3 RED `test/status.test.ts`: `matchProject` (NFD normalize, exact -> unique prefix -> unique substring, ambiguous -> multiple, unknown -> none; "app movil" matches "App Movil" accented).
 - [x] 4a.4 GREEN `projectSnapshot` in `src/linear.ts`; `src/status.ts` (`summarizeProject`, `renderStatus`, `matchProject`).
 - Verify: `pnpm test`, `pnpm typecheck`.

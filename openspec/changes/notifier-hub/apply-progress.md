@@ -313,3 +313,9 @@ Slice 4a: 4/4 tasks complete (41/41 across 1a-4a). Slices 4b-6 remain. Suite 233
 - `projectMilestones(first: 100)` is requested only on the first page (`@include(if: $withMilestones)`).
 - `status.ts`: user text (project, titles, state, milestone, person names, identifiers) gets a zero-width space after `*`, `_`, `~` and backtick, on top of `& < >` escaping; titles are cut at 120 characters with an ellipsis.
 - Suite 237/237, typecheck clean.
+
+### Batch 8c - Template decisions on slice 4a (strict TDD, tests first)
+- Issue identifiers render as Slack links `<url|ID>` (`url` added to the snapshot query and `SnapshotIssue`; `&` escaped in the URL via `escapeUrl`, now exported; plain identifier when Linear sends no url).
+- "Due this week" became "due soon": today through today+6 inclusive in `STATUS_TIME_ZONE` (summary field `dueSoon`), heading "📅 Vencen en los próximos 7 días (N)". Tests: Friday includes next Thursday, Sunday includes next Saturday and excludes next Sunday, today+6 included and today+7 excluded, year boundary. design.md, status-query spec and tasks.md wording updated.
+- NOTE FOR 4b: the status message is a link-heavy text, so 4b MUST post it with unfurls disabled (`unfurl_links: false`, `unfurl_media: false` on `chat.postMessage` and `chat.postEphemeral`; for `response_url` replies send the same two fields in the JSON body).
+- Suite 238/238, typecheck clean.
