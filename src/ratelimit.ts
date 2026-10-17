@@ -1,5 +1,7 @@
+// maxKeys bounds the per-address map: past it, expired addresses go first, then the least recently failed.
 export type RateLimiterOptions = { perIp: number; global: number; windowMs: number; maxKeys: number };
 
+// fail() must only be called for attempts that check() allowed; counting blocked attempts would extend a lockout.
 export type RateLimiter = {
   check: (ip: string, nowMs: number) => { allowed: boolean; retryAfterS: number };
   fail: (ip: string, nowMs: number) => void;
@@ -26,7 +28,7 @@ export const createRateLimiter = (o: RateLimiterOptions): RateLimiter => {
       if (kept.length === 0) byIp.delete(ip);
       else byIp.set(ip, kept);
     }
-    // Map iterates in insertion order, so the first keys are the oldest.
+    // fail() re-inserts on every touch, so Map insertion order is least-recently-used first.
     for (const ip of byIp.keys()) {
       if (byIp.size <= o.maxKeys) break;
       byIp.delete(ip);
@@ -41,7 +43,9 @@ export const createRateLimiter = (o: RateLimiterOptions): RateLimiter => {
     },
     fail: (ip, nowMs) => {
       all = [...live(all, nowMs), nowMs];
-      byIp.set(ip, [...live(byIp.get(ip) ?? [], nowMs), nowMs]);
+      const times = [...live(byIp.get(ip) ?? [], nowMs), nowMs];
+      byIp.delete(ip);
+      byIp.set(ip, times);
       if (byIp.size > o.maxKeys) prune(nowMs);
     },
     succeed: (ip) => {

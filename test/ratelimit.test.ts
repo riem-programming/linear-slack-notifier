@@ -72,6 +72,18 @@ test("the address map is bounded: stale keys go first, then the oldest", () => {
   assert.equal(small.check("c", 3).allowed, false);
 });
 
+test("eviction is least-recently-used: a failing address is refreshed and survives", () => {
+  const limiter = make({ maxKeys: 2, perIp: 1, global: 1000 });
+  limiter.fail("a", 0);
+  limiter.fail("b", 1);
+  limiter.fail("a", 2);
+  limiter.fail("c", 3);
+  assert.equal(limiter.size(), 2);
+  assert.equal(limiter.check("a", 4).allowed, false);
+  assert.equal(limiter.check("c", 4).allowed, false);
+  assert.equal(limiter.check("b", 4).allowed, true);
+});
+
 test("clientIp takes the last X-Forwarded-For entry, then the socket, then unknown", () => {
   assert.equal(clientIp("1.1.1.1, 2.2.2.2 , 3.3.3.3", "9.9.9.9"), "3.3.3.3");
   assert.equal(clientIp("5.5.5.5", undefined), "5.5.5.5");
