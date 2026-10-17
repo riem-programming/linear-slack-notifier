@@ -900,6 +900,37 @@ test("status search finds old events past the newest 50, ignores accents and cas
     assert.match(none, /No hay resultados para «&lt;b&gt;zzz&lt;\/b&gt;»/);
     assert.doesNotMatch(none, /<b>zzz/);
     assert.equal(countRows(none), 0);
+    assert.match(none, /stat-n">0<\/span><span class="stat-l">Notificados/);
+    assert.match(none, /En los 0 eventos mostrados/);
+    assert.match(none, /Prueba buscar en <a href="\/admin\/status\?all=1&amp;q=%3Cb%3Ezzz%3C%2Fb%3E">Todos los eventos<\/a>/);
+  }));
+
+test("status always renders the counters with their scope caption, also with no events", () =>
+  withApp(async ({ auth, base, store }) => {
+    const empty = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
+    assert.match(empty, /stat-n">0<\/span><span class="stat-l">Fallidos/);
+    assert.ok(empty.indexOf("class=\"stats\"") < empty.indexOf("Aún no hay eventos"));
+    seedEvent(store);
+    seedEvent(store, { outcome: "failed", reason: "post-failed", targets: [] });
+    assert.match(await (await fetch(`${base}/admin/status`, { headers: auth })).text(), /En los 2 eventos mostrados/);
+    assert.doesNotMatch(await (await fetch(`${base}/admin/status?all=1&q=zzz`, { headers: auth })).text(), /Prueba buscar en/);
+  }));
+
+test("a hostile q stays escaped in the field and the empty state; a whitespace-only q is no search", () =>
+  withApp(async ({ auth, base, store }) => {
+    seedEvent(store);
+    const q = '" autofocus onfocus=x';
+    const text = await (await fetch(`${base}/admin/status?q=${encodeURIComponent(q)}`, { headers: auth })).text();
+    assert.match(text, /value="&quot; autofocus onfocus=x"/);
+    assert.match(text, /No hay resultados para «&quot; autofocus onfocus=x»/);
+    // The attribute stays quoted: the value is closed right before maxlength, so no new attribute can start inside it.
+    assert.match(text, /value="&quot; autofocus onfocus=x" maxlength="100"/);
+    assert.equal((text.match(/"/g) ?? []).length % 2, 0);
+    const blank = await (await fetch(`${base}/admin/status?q=${encodeURIComponent("   ")}`, { headers: auth })).text();
+    assert.equal(countRows(blank), 1);
+    assert.match(blank, /value=""/);
+    assert.doesNotMatch(blank, /No hay resultados/);
+    assert.match(blank, /href="\/admin\/status\?all=1">Todos los eventos/);
   }));
 
 test("status search form and segment links preserve the query and the segment", () =>
@@ -925,7 +956,7 @@ test("status shows the issue link only when stored, plus mentioned names, and le
     store.finishEvent(id as number, { outcome: "notified", reason: null, targets: entry.targets, mentions: ["Ana Pérez", "Beto"] });
     store.insertEvent({ ...entry, issueIdentifier: "KAM-6", issueTitle: "Sin enlace" });
     const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
-    assert.match(text, /<a href="https:\/\/linear\.app\/kamai\/issue\/KAM-7\/con-enlace"[^>]*>KAM-7<\/a>/);
+    assert.match(text, /<a href="https:\/\/linear\.app\/kamai\/issue\/KAM-7\/con-enlace"[^>]*>KAM-7<span class="sr-only"> \(se abre en una pestaña nueva\)<\/span><\/a>/);
     assert.match(text, /Asignada · C1 · mencionó a Ana Pérez, Beto/);
     assert.doesNotMatch(text, /<a href="[^"]*"[^>]*>KAM-6/);
     assert.equal((text.match(/mencionó/g) ?? []).length, 1);

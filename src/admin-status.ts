@@ -38,29 +38,38 @@ export const countOutcomes = (rows: { outcome: string }[]): Counts => {
 
 // sv-SE yields an unambiguous "YYYY-MM-DD"; an unparseable timestamp has no key.
 const dayKey = (ms: number, timeZone: string): string =>
-  Number.isNaN(ms) ? "" : new Intl.DateTimeFormat("sv-SE", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
+  !Number.isFinite(ms) ? "" : new Intl.DateTimeFormat("sv-SE", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(ms);
 
-const dayBefore = (key: string): string => new Date(Date.parse(`${key}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+const dayBefore = (key: string): string => {
+  const ms = Date.parse(`${key}T00:00:00Z`);
+  return Number.isNaN(ms) ? "" : new Date(ms - 86_400_000).toISOString().slice(0, 10);
+};
 
 const dayLabel = (key: string, today: string): string => {
-  if (key === "") return "Sin fecha";
-  if (key === today) return "Hoy";
-  if (key === dayBefore(today)) return "Ayer";
+  if (key !== "" && key === today) return "Hoy";
+  if (key !== "" && key === dayBefore(today)) return "Ayer";
   const text = new Intl.DateTimeFormat("es", { timeZone: "UTC", weekday: "long", day: "numeric", month: "long" }).format(Date.parse(`${key}T12:00:00Z`));
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
 
 // Consecutive rows with the same local day share a group; the input order (newest first) is kept.
+// Rows with an unreadable date are never dropped: they form one "Sin fecha" group at the end.
 export const groupByDay = <T extends { receivedAt: string }>(rows: T[], timeZone: string, nowMs: number): { label: string; rows: T[] }[] => {
   const today = dayKey(nowMs, timeZone);
   const groups: { key: string; label: string; rows: T[] }[] = [];
+  const undated: T[] = [];
   for (const row of rows) {
     const key = dayKey(Date.parse(row.receivedAt), timeZone);
+    if (key === "") {
+      undated.push(row);
+      continue;
+    }
     const last = groups.at(-1);
     if (last && last.key === key) last.rows.push(row);
     else groups.push({ key, label: dayLabel(key, today), rows: [row] });
   }
-  return groups.map(({ label, rows: grouped }) => ({ label, rows: grouped }));
+  const out = groups.map(({ label, rows: grouped }) => ({ label, rows: grouped }));
+  return undated.length ? [...out, { label: "Sin fecha", rows: undated }] : out;
 };
 
 const formatTime = (iso: string, timeZone: string): string => {
@@ -85,13 +94,13 @@ type RowOptions = { timeZone: string; channelName: (id: string) => string };
 const detail = (event: LoggedEvent, channelName: (id: string) => string): string =>
   [
     event.outcome !== "notified" && event.reason ? (REASONS[event.reason] ?? event.reason) : "",
-    [...new Set(event.targets.map((t) => `${channelName(t.channel)}${t.error ? ` (${t.error})` : ""}`))].join(", "),
+    [...new Set(event.targets.map((t) => `${channelName(t.channel)}${t.outcome === "failed" ? `: falló${t.error ? ` (${t.error})` : ""}` : ""}`))].join(", "),
     event.mentions?.length ? `mencionó a ${event.mentions.join(", ")}` : "",
   ].filter(Boolean).join(" · ");
 
 const eventRow = (event: LoggedEvent, { timeZone, channelName }: RowOptions): Html => {
   const url = safeIssueUrl(event.issueUrl);
-  const id = event.issueIdentifier ? (url ? html`<a href="${url}" rel="noopener noreferrer" target="_blank">${event.issueIdentifier}</a>` : html`<strong>${event.issueIdentifier}</strong>`) : "";
+  const id = event.issueIdentifier ? (url ? html`<a href="${url}" rel="noopener noreferrer" target="_blank">${event.issueIdentifier}<span class="sr-only"> (se abre en una pestaña nueva)</span></a>` : html`<strong>${event.issueIdentifier}</strong>`) : "";
   const title = id || event.issueTitle ? html`${id} ${event.issueTitle ?? ""}` : html`<span class="muted">—</span>`;
   const tone = Object.hasOwn(TONES, event.outcome) ? (TONES[event.outcome] as Tone) : "neutral";
   const meta = [KINDS[event.kind] ?? event.kind, detail(event, channelName)].filter(Boolean).join(" · ");
@@ -128,8 +137,9 @@ export const statusPage = (store: Store, { timeZone, now, showAll, q: rawQuery }
   const empty = q ? emptyState(`No hay resultados para «${q}»`)
     : onlyHidden ? emptyState("No hay avisos para mostrar", "Hay eventos sin clasificar: míralos en «Todos los eventos».")
     : emptyState("Aún no hay eventos");
-  const body = events.length
-    ? html`<div class="stats">${stat(counts.notified, "Notificados")}${stat(counts.skipped, "Omitidos")}${stat(counts.failed, "Fallidos")}</div>${renderEvents(events, { timeZone, now, channelName })}`
-    : empty;
-  return render({ title: "Estado", current: "status", body: html`<p class="subtitle">Últimos eventos recibidos de Linear y qué pasó con cada uno.</p>${controls}${body}` });
+  const hint = q && !showAll ? html`<p class="empty-hint">Prueba buscar en <a href="${href(true, q)}">Todos los eventos</a>.</p>` : "";
+  const caption = events.length === 1 ? "En el evento mostrado" : `En los ${events.length} eventos mostrados`;
+  const stats = html`<div class="stats" role="group" aria-label="${caption}">${stat(counts.notified, "Notificados")}${stat(counts.skipped, "Omitidos")}${stat(counts.failed, "Fallidos")}</div><p class="stats-caption">${caption}</p>`;
+  const body = events.length ? renderEvents(events, { timeZone, now, channelName }) : html`${empty}${hint}`;
+  return render({ title: "Estado", current: "status", body: html`<p class="subtitle">Últimos eventos recibidos de Linear y qué pasó con cada uno.</p>${controls}${stats}${body}` });
 };

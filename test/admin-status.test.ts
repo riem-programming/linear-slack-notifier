@@ -47,7 +47,7 @@ const render = (events: LoggedEvent[], names: Record<string, string> = { C1: "ge
 
 test("a row shows dot, linked id, title, kind with channels and mentions, pill and HH:mm", () => {
   const text = render([event({ issueUrl: "https://linear.app/kamai/issue/KAM-1/x", mentions: ["Ana", "Beto"] })]);
-  assert.match(text, /<a href="https:\/\/linear\.app\/kamai\/issue\/KAM-1\/x"[^>]*>KAM-1<\/a>/);
+  assert.match(text, /<a href="https:\/\/linear\.app\/kamai\/issue\/KAM-1\/x"[^>]*>KAM-1<span class="sr-only"> \(se abre en una pestaña nueva\)<\/span><\/a>/);
   assert.match(text, /Fix login/);
   assert.match(text, /Creada · #general · mencionó a Ana, Beto/);
   assert.match(text, /pill-success">Notificado/);
@@ -63,7 +63,7 @@ test("skipped and failed rows show the Spanish reason, unknown codes fall back t
   assert.match(skipped, /pill-warning">Omitido/);
   const failed = render([event({ outcome: "failed", reason: "post-failed", targets: [{ channel: "C1", outcome: "failed", error: "not_in_channel" }] })]);
   assert.match(failed, /Falló el envío a Slack/);
-  assert.match(failed, /#general \(not_in_channel\)/);
+  assert.match(failed, /#general: falló \(not_in_channel\)/);
   assert.match(failed, /pill-error">Fallido/);
   assert.match(render([event({ kind: "mystery", outcome: "skipped", reason: "weird-code", targets: [] })]), /mystery · weird-code/);
 });
@@ -95,4 +95,21 @@ test("hostile text is escaped everywhere", () => {
   assert.doesNotMatch(text, /<b>K|<script>alert|<img src|<svg onload|<i>C|<u>e/);
   assert.match(text, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assertNoInlineCode(text);
+});
+
+test("targets: failed ones are marked even without an error, notified ones are just the name", () => {
+  const targets = [{ channel: "C1", outcome: "failed" as const }, { channel: "C2", outcome: "notified" as const }, { channel: "C3", outcome: "failed" as const, error: "x" }];
+  const text = render([event({ outcome: "failed", reason: "post-failed", targets })], { C1: "a", C2: "b", C3: "c" });
+  assert.match(text, /#a: falló, #b, #c: falló \(x\)/);
+  assert.doesNotMatch(text, /#b: /);
+});
+
+test("invalid now or received_at never throws; undated rows form one Sin fecha group at the end", () => {
+  const rows = [event({ id: 1, receivedAt: "bad" }), event({ id: 2 }), event({ id: 3, receivedAt: "worse" })];
+  const groups = groupByDay(rows, TZ, NOW);
+  assert.deepEqual(groups.map((g) => g.label), ["Hoy", "Sin fecha"]);
+  assert.deepEqual(groups[1]?.rows.map((r) => r.id), [1, 3]);
+  const noNow = groupByDay(rows, TZ, Number.NaN);
+  assert.deepEqual(noNow.map((g) => g.label.split(",")[0]), ["Sábado", "Sin fecha"]);
+  assert.doesNotThrow(() => groupByDay([event()], TZ, Number.POSITIVE_INFINITY));
 });
