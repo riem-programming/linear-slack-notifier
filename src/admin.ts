@@ -57,6 +57,9 @@ const safeDecode = (value: string): string => {
   }
 };
 const MAX_FORM_BYTES = 100_000;
+const MAX_CHANNEL_PROJECTS = 200;
+const CHANNEL_PROJECTS_ROUTE = /^\/admin\/channels\/([^/]+)\/projects$/;
+const CHANNEL_ID = /^[A-Z0-9]{1,32}$/;
 type Page = (options: { title: string; current: NavKey; body: Html }) => Html;
 // Per-request view of the authenticated session: the render function embeds its logout CSRF token.
 type Ctx = { csrf: string; render: Page };
@@ -66,6 +69,7 @@ const FLASH: Record<string, { ok: boolean; text: string }> = {
   refreshed: { ok: true, text: "Lista de canales actualizada." },
   linked: { ok: true, text: "Proyecto vinculado al canal." },
   unlinked: { ok: true, text: "Proyecto desvinculado del canal." },
+  "channel-saved": { ok: true, text: "Proyectos del canal guardados." },
   exists: { ok: true, text: "El proyecto ya estaba vinculado a ese canal." },
   "not-found": { ok: false, text: "No se encontró el canal o el proyecto indicado." },
   "slack-error": { ok: false, text: "No se pudo consultar Slack. Se muestra la última lista guardada." },
@@ -283,14 +287,26 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     return done(res, store.unlink(channel, project) ? "unlinked" : "not-found");
   };
 
+  // Replaces the channel's links with the repeated `project` fields; validates everything before the single transaction.
+  const channelProjectsPost = (res: ServerResponse, rawId: string, params: URLSearchParams): void => {
+    const channelId = safeDecode(rawId);
+    const projectIds = [...new Set(params.getAll("project"))];
+    const known = new Set(store.listProjects().map((p) => p.id));
+    const valid = CHANNEL_ID.test(channelId) && store.listChannels().some((c) => c.id === channelId)
+      && projectIds.length <= MAX_CHANNEL_PROJECTS && projectIds.every((id) => known.has(id));
+    if (!valid) return send(res, 400, { error: "invalid request" }, SECURITY_HEADERS);
+    store.setChannelProjects(channelId, projectIds);
+    done(res, "channel-saved");
+  };
+
   // Same-origin check plus the form body; answers 403/413/400 itself and returns null when it cannot.
-  const readForm = async (req: IncomingMessage, res: ServerResponse): Promise<Record<string, string> | null> => {
+  const readForm = async (req: IncomingMessage, res: ServerResponse): Promise<URLSearchParams | null> => {
     if (!checkOrigin({ origin: req.headers.origin, referer: req.headers.referer }, req.headers.host)) {
       send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
       return null;
     }
     try {
-      return parseForm((await readBody(req, MAX_FORM_BYTES)).toString("utf8"));
+      return new URLSearchParams((await readBody(req, MAX_FORM_BYTES)).toString("utf8"));
     } catch (error) {
       send(res, error instanceof BodyTooLargeError ? 413 : 400, { error: "invalid request" }, SECURITY_HEADERS);
       return null;
@@ -298,19 +314,23 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
   };
 
   const post = async (req: IncomingMessage, res: ServerResponse, path: string, csrf: string): Promise<void> => {
-    const form = await readForm(req, res);
-    if (!form) return;
+    const params = await readForm(req, res);
+    if (!params) return;
+    const form = parseForm(params.toString());
     if (!safeEqual(form.csrf ?? "", csrf)) return send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
     const route = path.replace(/\/+$/, "");
     if (route === "/admin/logout") return redirect(res, "/admin/login?status=logged-out", { ...SECURITY_HEADERS, "set-cookie": clearSessionCookie() });
     if (["/admin/channels/refresh", "/admin/channels/link", "/admin/channels/unlink"].includes(route)) return channelsPost(res, route, form);
+    const sheet = CHANNEL_PROJECTS_ROUTE.exec(route);
+    if (sheet) return channelProjectsPost(res, sheet[1] ?? "", params);
     if (route === "/admin/people/sync" || route === "/admin/people/override") return peoplePost(res, route, form);
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
 
   const loginPost = async (req: IncomingMessage, res: ServerResponse, secret: string, pass: string): Promise<void> => {
-    const form = await readForm(req, res);
-    if (!form) return;
+    const params = await readForm(req, res);
+    if (!params) return;
+    const form = parseForm(params.toString());
     const next = safeNext(form.next);
     const ip = clientIp(req.headers["x-forwarded-for"], req.socket.remoteAddress);
     const at = now();
