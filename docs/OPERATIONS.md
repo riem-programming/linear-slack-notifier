@@ -92,6 +92,9 @@ How it behaves:
 - **HTTPS is required.** The cookie is `Secure`, so over plain HTTP the browser drops it and the login loops. Use the HTTPS host.
 - Changing `ADMIN_PASSWORD` or `SESSION_SECRET` ends every session; everyone must sign in again.
 - After 5 wrong passwords from one address (or 30 in total) within 15 minutes, the login answers 429 with "Demasiados intentos" until the window passes. A restart resets the counters.
+- The per-address limit trusts the **last** `X-Forwarded-For` entry, which Traefik appends with the real client address. The app must therefore only be reachable through Traefik; if it is exposed directly, a client can spoof the header and dodge the per-address limit (only the global cap remains).
+- The global cap (30 failures from any addresses in 15 minutes) locks **everyone** out of the login, including you, for up to 15 minutes. Wait for the `Retry-After` time or restart the service.
+- `SameSite=Strict` means the browser does not send the cookie on the first navigation from another site. A link to `/admin/...` opened from Slack or email lands on the login page once; sign in (or reload) and it works.
 - Use **Cerrar sesión** in the sidebar to sign out.
 - If `SESSION_SECRET` is missing or shorter than 32 bytes, or `ADMIN_PASSWORD` is missing, every `/admin` route answers 403 and the log shows `Admin disabled: <VARIABLE> ...` (never the value). Webhooks, Slack and `/health` keep working.
 

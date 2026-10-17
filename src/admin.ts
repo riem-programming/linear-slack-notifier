@@ -399,8 +399,9 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
   };
 
   // Defense in depth: loadConfig already nulls a short secret, but this module must not trust its caller.
-  const secretOk = typeof sessionSecret === "string" && Buffer.byteLength(sessionSecret) >= SESSION_SECRET_MIN_BYTES;
-  if (!password || !sessionSecret || !secretOk) {
+  const secret = sessionSecret?.trim() ?? "";
+  const secretOk = Buffer.byteLength(secret) >= SESSION_SECRET_MIN_BYTES;
+  if (!password || !secretOk) {
     // Name the missing variable, never a value.
     if (!password) logger.warn("Admin disabled: ADMIN_PASSWORD is not set");
     if (!secretOk) logger.warn("Admin disabled: SESSION_SECRET is missing or shorter than 32 bytes");
@@ -414,16 +415,16 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
       return serveAsset(res, safeDecode(path.slice(ASSETS_PREFIX.length)), version, SECURITY_HEADERS);
     }
     const url = new URL(req.url ?? "", "http://localhost");
-    const session = verifySession(readCookie(req.headers.cookie, SESSION_COOKIE), sessionSecret, password, now());
+    const session = verifySession(readCookie(req.headers.cookie, SESSION_COOKIE), secret, password, now());
     try {
-      if (path.replace(/\/+$/, "") === "/admin/login") return await loginRoute(req, res, url.searchParams, session !== null, sessionSecret, password);
+      if (path.replace(/\/+$/, "") === "/admin/login") return await loginRoute(req, res, url.searchParams, session !== null, secret, password);
       if (!session) {
         if (req.method !== "GET" && req.method !== "HEAD") return send(res, 401, { error: "unauthorized" }, SECURITY_HEADERS);
         // Only allow-listed paths travel as `next`; anything else lands on the default after login.
         const wanted = path + url.search;
         return redirect(res, safeNext(wanted) === wanted ? `/admin/login?next=${encodeURIComponent(wanted)}` : "/admin/login", SECURITY_HEADERS);
       }
-      const csrf = csrfFor(sessionSecret, session);
+      const csrf = csrfFor(secret, session);
       const ctx: Ctx = { csrf, render: ({ title, current, body }) => shell({ title, current, envLabel, timeZone, body, logoutCsrf: csrf }) };
       if (req.method === "GET" || req.method === "HEAD") await get(res, path, url.searchParams, ctx);
       else if (req.method === "POST") await post(req, res, path, csrf);

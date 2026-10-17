@@ -212,10 +212,44 @@ test("the sixth attempt from one address gets 429 with Retry-After and the passw
     const retry = Number(limited.headers.get("retry-after"));
     assert.ok(Number.isInteger(retry) && retry > 0 && retry <= 900, `retry-after ${retry}`);
     assert.match(await limited.text(), /Demasiados intentos\. Espera unos minutos e inténtalo de nuevo\./);
-    // A limited attempt is not counted, so it cannot extend the lockout.
-    const again = Number((await attempt(h, "wrong")).headers.get("retry-after"));
-    assert.ok(again <= retry);
   }));
+
+test("a limited attempt is not counted: the lockout ends exactly 15 minutes after the fifth failure", () => {
+  let at = Date.parse("2026-10-17T15:00:00.000Z");
+  return withApp(async (h) => {
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal((await attempt(h, "wrong")).status, 401);
+      at += 1000;
+    }
+    // Failures at +0s..+4s; the oldest counted one leaves the window at +900s.
+    at += 100_000;
+    const first = await attempt(h, "wrong");
+    assert.equal(first.status, 429);
+    const wait = Number(first.headers.get("retry-after"));
+    assert.equal(wait, 900 - 105);
+    // Hammering while limited must not push the end of the lockout.
+    for (let i = 0; i < 5; i += 1) assert.equal((await attempt(h, "wrong")).status, 429);
+    assert.equal(Number((await attempt(h, "wrong")).headers.get("retry-after")), wait);
+    at += wait * 1000;
+    assert.equal((await attempt(h, PASSWORD)).status, 303);
+  }, { now: () => at });
+});
+
+test("30 failures from different addresses trigger the global 429 for everyone", () =>
+  withApp(async (h) => {
+    for (let i = 0; i < 30; i += 1) {
+      assert.equal((await attempt(h, "wrong", { "x-forwarded-for": `10.0.${Math.floor(i / 250)}.${i}` })).status, 401, `failure ${i + 1}`);
+    }
+    const fresh = await attempt(h, PASSWORD, { "x-forwarded-for": "203.0.113.9" });
+    assert.equal(fresh.status, 429);
+    assert.equal(fresh.headers.get("set-cookie"), null);
+    assert.ok(Number(fresh.headers.get("retry-after")) > 0);
+  }));
+
+test("a SESSION_SECRET that is short once trimmed disables the admin", () =>
+  withApp(async ({ base }) => {
+    assert.equal((await fetch(`${base}/admin/login`)).status, 403);
+  }, { sessionSecret: ` ${"x".repeat(31)} ` }));
 
 test("the last X-Forwarded-For hop is the one counted, and a success clears that address", () =>
   withApp(async (h) => {
