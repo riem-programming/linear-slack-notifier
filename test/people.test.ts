@@ -133,7 +133,7 @@ test("setOverride rejects lowercase and whitespace-only ids", () => {
   assert.equal(store.getPerson("u1")?.matchSource, "unmatched");
 });
 
-test("syncPeople deactivates stored people who are inactive or gone from Linear, manual ones too", async () => {
+test("syncPeople deactivates stored people who are inactive or gone from Linear but keeps their data", async () => {
   const store = setup();
   store.upsertPerson({ linearUserId: "gone", name: "Gone", email: "g@x.com", slackUserId: "UGONE", matchSource: "auto" });
   store.upsertPerson({ linearUserId: "manual", name: "Manual", email: "m@x.com", slackUserId: "UMAN", matchSource: "manual" });
@@ -141,8 +141,10 @@ test("syncPeople deactivates stored people who are inactive or gone from Linear,
   store.upsertPerson({ linearUserId: "stay", name: "Stay", email: "s@x.com", slackUserId: "USTAY", matchSource: "auto" });
   await syncPeople([user("off", "Off", "o@x.com", false), user("stay", "Stay", "s@x.com")], directory({ "s@x.com": "USTAY" }).lookup, store);
   for (const id of ["gone", "manual", "off"]) {
-    assert.deepEqual([store.getPerson(id)?.slackUserId, store.getPerson(id)?.matchSource, store.getPerson(id)?.active], [null, "unmatched", false], id);
+    assert.equal(store.getPerson(id)?.active, false, id);
   }
+  assert.deepEqual([store.getPerson("manual")?.slackUserId, store.getPerson("manual")?.matchSource], ["UMAN", "manual"]);
+  assert.equal(store.getPerson("gone")?.slackUserId, "UGONE");
   assert.deepEqual([store.getPerson("stay")?.slackUserId, store.getPerson("stay")?.active], ["USTAY", true]);
 });
 
@@ -151,4 +153,25 @@ test("a deactivated user who comes back is active again and matched by email", a
   store.upsertPerson({ linearUserId: "u1", name: "Luis", email: "l@x.com", slackUserId: null, matchSource: "unmatched", active: false });
   await syncPeople([user("u1", "Luis", "l@x.com")], directory({ "l@x.com": "ULUIS" }).lookup, store);
   assert.deepEqual([store.getPerson("u1")?.slackUserId, store.getPerson("u1")?.active], ["ULUIS", true]);
+});
+
+test("an empty Linear list is treated as suspicious: nobody is deactivated and a warning is logged", async () => {
+  const store = setup();
+  store.upsertPerson({ linearUserId: "u1", name: "Luis", email: null, slackUserId: "ULUIS", matchSource: "auto" });
+  const warnings: string[] = [];
+  await syncPeople([], directory({}).lookup, store, (message) => warnings.push(message));
+  assert.equal(store.getPerson("u1")?.active, true);
+  assert.equal(warnings.length, 1);
+});
+
+test("a manual row survives deactivate then reactivate with the same Slack id, an auto row is re-matched", async () => {
+  const store = setup();
+  store.upsertPerson({ linearUserId: "m", name: "Manual", email: "m@x.com", slackUserId: "UMAN", matchSource: "manual" });
+  store.upsertPerson({ linearUserId: "a", name: "Auto", email: "a@x.com", slackUserId: "UOLD", matchSource: "auto" });
+  const lookup = directory({ "a@x.com": "UNEW" }).lookup;
+  await syncPeople([user("other", "Other", "o@x.com")], lookup, store);
+  assert.deepEqual([store.getPerson("m")?.active, store.getPerson("a")?.active], [false, false]);
+  await syncPeople([user("m", "Manual", "m@x.com"), user("a", "Auto", "a@x.com"), user("other", "Other", "o@x.com")], lookup, store);
+  assert.deepEqual(store.getPerson("m"), { linearUserId: "m", name: "Manual", email: "m@x.com", slackUserId: "UMAN", matchSource: "manual", active: true });
+  assert.deepEqual([store.getPerson("a")?.slackUserId, store.getPerson("a")?.active], ["UNEW", true]);
 });

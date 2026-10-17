@@ -17,7 +17,7 @@ type AdminOptions = {
   // Unset or empty disables the admin entirely.
   password: string | undefined;
   timeZone: string;
-  logger: Pick<Console, "error">;
+  logger: Pick<Console, "error" | "warn">;
   csrfSecret?: string;
 };
 
@@ -224,7 +224,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
       if (!linear?.listUsers) throw new Error("Linear unavailable");
       // Known Linear users appear right away as unlinked so an override can be set before the first sync.
       const users = await linear.listUsers();
-      deactivateMissing(users, store);
+      deactivateMissing(users, store, (message) => logger.warn(message));
       for (const user of users) {
         if (user.active && !store.getPerson(user.id)) {
           store.upsertPerson({ linearUserId: user.id, name: user.name, email: user.email?.trim() || null, slackUserId: null, matchSource: "unmatched" });
@@ -269,7 +269,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
         logUpstream("Linear user list", error);
         return back("linear-error");
       }
-      return back((await syncPeople(users, lookupEmail, store)).failed ? "synced-partial" : "synced");
+      return back((await syncPeople(users, lookupEmail, store, (message) => logger.warn(message))).failed ? "synced-partial" : "synced");
     }
     const user = form.user ?? "";
     const slackId = form.slack ?? "";

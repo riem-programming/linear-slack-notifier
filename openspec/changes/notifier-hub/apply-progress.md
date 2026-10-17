@@ -275,3 +275,4 @@ Slice 3c: 5/5 tasks complete (37/37 across 1a-3c). Slices 4a-6 remain. Suite 196
 - Migration 3 adds `people.active` (default 1). `syncPeople` and the People GET flag stored people who are inactive or absent from a successful Linear read as inactive, `unmatched` with no Slack id (manual rows too). Inactive people are hidden from the screen and never mentioned (`app.ts` lookup keeps the name only). A returning user is re-activated and re-matched by sync.
 - Added tests: blank Slack id (clear) and lowercase id (invalid), two Linear users sharing an email (both match).
 - Suite 206/206, typecheck clean. Size vs origin/develop (src+test): 756 insertions, 70 deletions.
+- Batch 7c: `deactivateMissing` is a no-op (with a warning) when Linear returns no users, and deactivation only sets `active=false` (Slack id and match source, manual included, are kept). A returning manual row is restored as-is; an auto row is re-matched by email on sync. Suite 208/208.

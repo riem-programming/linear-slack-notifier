@@ -16,22 +16,26 @@ const match = async (email: string | null, lookup: EmailLookup): Promise<{ slack
   return slackUserId ? { slackUserId, matchSource: "auto" } : { slackUserId: null, matchSource: "unmatched" };
 };
 
-// Stored people who are inactive or missing from a successful Linear read lose their Slack link (manual ones too)
-// and are flagged inactive, so they are never mentioned or listed.
-export const deactivateMissing = (users: LinearUser[], store: PeopleStore): void => {
+// Stored people who are inactive or missing from a successful Linear read are flagged inactive (data is kept),
+// so they are never mentioned or listed. An empty list is suspicious (outage, revoked scope) and changes nothing.
+export const deactivateMissing = (users: LinearUser[], store: PeopleStore, warn: (message: string) => void = () => {}): void => {
+  if (users.length === 0) {
+    warn("Linear returned no users: skipping deactivation");
+    return;
+  }
   const activeIds = new Set(users.filter((user) => user.active).map((user) => user.id));
   for (const person of store.listPeople()) {
     if (person.active !== false && !activeIds.has(person.linearUserId)) {
-      store.upsertPerson({ ...person, slackUserId: null, matchSource: "unmatched", active: false });
+      store.upsertPerson({ ...person, active: false });
     }
   }
 };
 
 // Matches active Linear users to Slack by email. Manual rows keep their Slack id (only name and email refresh);
 // a failed lookup leaves the stored row untouched.
-export const syncPeople = async (users: LinearUser[], lookup: EmailLookup, store: PeopleStore): Promise<SyncSummary> => {
+export const syncPeople = async (users: LinearUser[], lookup: EmailLookup, store: PeopleStore, warn?: (message: string) => void): Promise<SyncSummary> => {
   const summary: SyncSummary = { auto: 0, unmatched: 0, manual: 0, failed: 0 };
-  deactivateMissing(users, store);
+  deactivateMissing(users, store, warn);
   for (const { id, name, active, email: rawEmail } of users) {
     if (!active) continue;
     const email = rawEmail?.trim() || null;

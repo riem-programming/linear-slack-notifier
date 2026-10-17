@@ -562,7 +562,7 @@ test("people page hides deactivated people and a successful Linear read deactiva
     const text = await (await fetch(`${base}/admin/people`, { headers: auth() })).text();
     assert.doesNotMatch(text, /Fulano Baja|Mengano Inactivo|UGONE/);
     assert.match(text, /Luis/);
-    assert.deepEqual([store.getPerson("gone")?.slackUserId, store.getPerson("gone")?.active], [null, false]);
+    assert.deepEqual([store.getPerson("gone")?.slackUserId, store.getPerson("gone")?.matchSource, store.getPerson("gone")?.active], ["UGONE", "manual", false]);
   }, { users: async () => LINEAR_USERS }));
 
 test("a whitespace-only Slack id is a clear request and a lowercase id is rejected", () =>
