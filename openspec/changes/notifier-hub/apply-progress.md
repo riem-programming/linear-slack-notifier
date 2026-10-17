@@ -267,3 +267,11 @@ Mode: Strict TDD. Branch: `feat/kamaiti-80-admin-people` (base `origin/develop`,
 
 ### Status
 Slice 3c: 5/5 tasks complete (37/37 across 1a-3c). Slices 4a-6 remain. Suite 196/196, typecheck clean.
+
+### Batch 7b - Staging feedback and review fixes on slice 3c (strict TDD, tests first)
+- `chat.postMessage` sends `unfurl_links: false` and `unfurl_media: false` (payload test).
+- Estado "Canales" column shows `#name` from the store, falling back to the raw id; escaped (tests).
+- `syncPeople` stops at the first `ratelimited` error (`stopped: true`, `failed` counted) so the admin sees `synced-partial`; other failures continue.
+- Migration 3 adds `people.active` (default 1). `syncPeople` and the People GET flag stored people who are inactive or absent from a successful Linear read as inactive, `unmatched` with no Slack id (manual rows too). Inactive people are hidden from the screen and never mentioned (`app.ts` lookup keeps the name only). A returning user is re-activated and re-matched by sync.
+- Added tests: blank Slack id (clear) and lowercase id (invalid), two Linear users sharing an email (both match).
+- Suite 206/206, typecheck clean. Size vs origin/develop (src+test): 756 insertions, 70 deletions.
