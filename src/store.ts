@@ -1,6 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import { foldText } from "./text.ts";
 
 const DEFAULT_RECENT_EVENTS = 50;
+const MAX_QUERY_CHARS = 100;
 
 export type Channel = { id: string; name: string; isMember: boolean };
 export type Project = { id: string; name: string };
@@ -51,7 +53,7 @@ export type Store = {
   hasNotifiedCreate: (issueId: string, assigneeId: string) => boolean;
   // Relabels in-flight rows older than the window as interrupted (the process died mid-delivery). Returns rows changed.
   sweepInterrupted: (olderThanMs: number) => number;
-  recentEvents: (limit?: number, options?: { hideUnclassified?: boolean }) => LoggedEvent[];
+  recentEvents: (limit?: number, options?: { hideUnclassified?: boolean; q?: string }) => LoggedEvent[];
 };
 
 type Row = Record<string, string | number | null>;
@@ -168,10 +170,18 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
          LIMIT 1`,
         issueId, assigneeId,
       ).length > 0,
-    recentEvents: (limit = DEFAULT_RECENT_EVENTS, { hideUnclassified = false } = {}) =>
-      all(
-        `SELECT * FROM event_log ${hideUnclassified ? "WHERE kind <> 'unclassified'" : ""} ORDER BY received_at DESC, id DESC LIMIT ?`,
-        limit,
-      ).map(toEvent),
+    // `q` matches identifier and title, ignoring accents and case, as a literal substring over all stored rows.
+    recentEvents: (limit = DEFAULT_RECENT_EVENTS, { hideUnclassified = false, q = "" } = {}) => {
+      const folded = foldText(q.slice(0, MAX_QUERY_CHARS));
+      const where = [
+        ...(hideUnclassified ? ["kind <> 'unclassified'"] : []),
+        ...(folded ? ["fold(coalesce(issue_identifier, '') || ' ' || coalesce(issue_title, '')) LIKE ? ESCAPE '\\'"] : []),
+      ];
+      const params = folded ? [`%${folded.replace(/[\\%_]/g, "\\$&")}%`, limit] : [limit];
+      return all(
+        `SELECT * FROM event_log ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY received_at DESC, id DESC LIMIT ?`,
+        ...params,
+      ).map(toEvent);
+    },
   };
 };

@@ -195,3 +195,50 @@ test("people are active by default and the flag round-trips", () => {
   store.upsertPerson({ linearUserId: "u2", name: "B", email: null, slackUserId: null, matchSource: "unmatched", active: false });
   assert.deepEqual(store.listPeople().map((p) => p.active), [true, false]);
 });
+
+const seed = (store: ReturnType<typeof setup>["store"], rows: Partial<EventEntry>[]): void =>
+  rows.forEach((row, i) => store.insertEvent(entry(`s${i}`, row)));
+
+test("recentEvents with q finds an old match beyond the newest 50, ignoring accents and case", () => {
+  const { store } = setup();
+  seed(store, [{ issueIdentifier: "KAM-42", issueTitle: "Gestión de acceso" }]);
+  seed(store, Array.from({ length: 119 }, (_, i) => ({ issueIdentifier: `OTH-${i}`, issueTitle: "Other" })).map((r, i) => ({ ...r, deliveryId: `x${i}` })));
+  store.insertEvent(entry("late", { issueIdentifier: "OTH-late" }));
+  assert.equal(store.recentEvents().length, 50);
+  assert.deepEqual(store.recentEvents(50, { q: "kam-42" }).map((e) => e.issueIdentifier), ["KAM-42"]);
+  assert.equal(store.recentEvents(50, { q: "gestion" }).length, 1);
+  assert.equal(store.recentEvents(50, { q: "GESTIÓN" }).length, 1);
+  assert.equal(store.recentEvents(50, { q: "  ges   " }).length, 1);
+});
+
+test("recentEvents q is literal for %, _ and backslash and safe against injection strings", () => {
+  const { store } = setup();
+  seed(store, [
+    { issueTitle: "100% done" }, { issueTitle: "snake_case" }, { issueTitle: "back\\slash" }, { issueTitle: "plain text" },
+  ]);
+  assert.deepEqual(store.recentEvents(50, { q: "%" }).map((e) => e.issueTitle), ["100% done"]);
+  assert.deepEqual(store.recentEvents(50, { q: "_" }).map((e) => e.issueTitle), ["snake_case"]);
+  assert.deepEqual(store.recentEvents(50, { q: "\\" }).map((e) => e.issueTitle), ["back\\slash"]);
+  assert.equal(store.recentEvents(50, { q: "a_e" }).length, 0);
+  assert.equal(store.recentEvents(50, { q: "'; DROP TABLE event_log; --" }).length, 0);
+  assert.equal(store.recentEvents().length, 4);
+});
+
+test("recentEvents q caps at 50 newest first, falls back when blank, and honors hideUnclassified", () => {
+  const { store } = setup();
+  seed(store, Array.from({ length: 60 }, (_, i) => ({ issueIdentifier: `KAM-${i}`, issueTitle: "match" })));
+  store.insertEvent(entry("u", { kind: "unclassified", issueIdentifier: null, issueTitle: "match unclassified" }));
+  const found = store.recentEvents(50, { q: "match" });
+  assert.equal(found.length, 50);
+  assert.equal(found[0]?.kind, "unclassified");
+  assert.equal(store.recentEvents(50, { q: "match", hideUnclassified: true })[0]?.issueIdentifier, "KAM-59");
+  assert.equal(store.recentEvents(50, { q: "match", hideUnclassified: true }).every((e) => e.kind !== "unclassified"), true);
+  assert.deepEqual(store.recentEvents(50, { q: "   " }).map((e) => e.id), store.recentEvents().map((e) => e.id));
+  assert.equal(store.recentEvents(50, { q: "x".repeat(500) }).length, 0);
+});
+
+test("recentEvents q works on legacy rows with null identifier and title", () => {
+  const { store } = setup();
+  seed(store, [{ issueIdentifier: null, issueTitle: null }, { issueTitle: "needle" }]);
+  assert.deepEqual(store.recentEvents(50, { q: "needle" }).map((e) => e.issueTitle), ["needle"]);
+});
