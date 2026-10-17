@@ -70,6 +70,33 @@ Issues from a project that is not in the map (or that have no project) are skipp
 
 Do it whenever the secret may have leaked.
 
+## Admin panel login
+
+The admin panel (`/admin`) uses a login page with a signed session cookie. There is no Basic Auth any more: an `Authorization: Basic` header grants nothing.
+
+| Variable | Purpose | Secret |
+|----------|---------|--------|
+| `ADMIN_PASSWORD` | The single shared password typed on the login page | **Yes** |
+| `SESSION_SECRET` | Signs the session cookie and CSRF tokens. At least 32 bytes, separate from the password | **Yes** |
+| `ADMIN_ENV_LABEL` | Optional label shown in the sidebar (for example `Staging`). Cut to 40 characters | No |
+
+Generate the session secret once and paste it into Dokploy → **Environment**:
+
+```bash
+openssl rand -hex 32
+```
+
+How it behaves:
+
+- The session lasts 8 hours from login (no renewal) and survives restarts. Cookie: `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/admin`.
+- **HTTPS is required.** The cookie is `Secure`, so over plain HTTP the browser drops it and the login loops. Use the HTTPS host.
+- Changing `ADMIN_PASSWORD` or `SESSION_SECRET` ends every session; everyone must sign in again.
+- After 5 wrong passwords from one address (or 30 in total) within 15 minutes, the login answers 429 with "Demasiados intentos" until the window passes. A restart resets the counters.
+- Use **Cerrar sesión** in the sidebar to sign out.
+- If `SESSION_SECRET` is missing or shorter than 32 bytes, or `ADMIN_PASSWORD` is missing, every `/admin` route answers 403 and the log shows `Admin disabled: <VARIABLE> ...` (never the value). Webhooks, Slack and `/health` keep working.
+
+**Rollback:** revert the PR that introduced the login (feat(auth)!). Basic Auth returns and session cookies are ignored. `SESSION_SECRET` can stay set.
+
 ## Troubleshooting
 
 Start with the **Logs** tab in Dokploy (container logs, not the build log under Deployments).
@@ -82,6 +109,8 @@ Start with the **Logs** tab in Dokploy (container logs, not the build log under 
 | `Failed to post to Slack` | Wrong or revoked webhook URL in `SLACK_PROJECT_WEBHOOKS` | Generate a new Incoming Webhook URL and update the map → Deploy |
 | Names in plain text instead of @mentions | Person not in the map, or a typo in their ID | Compare the `actor=` / `assignee=` IDs in the log with the map keys |
 | Logs never show the `Slack user map` startup line | An old image is running | Deployments tab: confirm the latest deploy shows the newest commit and is **Done**. Use **Deploy**, not Rebuild |
+| `/admin` answers 403 | `SESSION_SECRET` missing or under 32 bytes, or `ADMIN_PASSWORD` missing | The log names the variable; set it (see Admin panel login) → Deploy |
+| Login page keeps coming back after a correct password | Admin opened over plain HTTP (the cookie is `Secure`) | Use the HTTPS host |
 | Container exits at startup | Invalid `SLACK_USER_MAP` / `SLACK_PROJECT_WEBHOOKS` JSON or a missing required variable | The log names the problem; fix the variable → Deploy |
 
 ### Log lines
