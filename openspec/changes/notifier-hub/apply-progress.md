@@ -231,3 +231,39 @@ Slice 3b: 4/4 tasks complete (32/32 across 1a-3b). Slices 3c-6 remain. Suite 162
 - Linear logs a warning when the 20-page cap truncates the list; nodes without non-empty string `id` and `name` are skipped.
 - Decision D12 (design.md): refresh only upserts. Channels archived/deleted in Slack keep their links until unlinked manually; posts to them are logged as failed (`channel_not_found` / `is_archived`). No schema change in this slice. Follow-up 6.1b added to tasks.md for `docs/OPERATIONS.md`.
 - Suite 167/167, typecheck clean.
+
+## Batch 7 - Slice 3c (People screen) + Status screen improvements
+
+Mode: Strict TDD. Branch: `feat/kamaiti-80-admin-people` (base `origin/develop`, 1a-3b merged). Linear: KAMAITI-80.
+
+### Completed
+- [x] 3c.1 RED/GREEN `test/people.test.ts` + `src/people.ts` (`syncPeople`, `setOverride`, `clearOverride`, `isSlackMemberId`)
+- [x] 3c.2 RED/GREEN client tests: `listUsers` (id, name, email, active; cursors; malformed nodes skipped) and `lookupUserByEmail` (`users_not_found` -> null, other errors thrown, short 429 retried)
+- [x] 3c.3 RED `test/admin.test.ts`: People page states, sync/override/clear POSTs, CSRF + Origin, escaping, Linear down
+- [x] 3c.4 GREEN `src/people.ts`, client methods, People page and handlers in `src/admin.ts`
+- [x] 3c.5 `test/app.test.ts`: mentions start working for people stored by `syncPeople` (webhook path already used `store.getPerson`; test added, no code change)
+- [x] Estado a) Spanish copy for `not a notifiable event` and `missing issue fields` reasons
+- [x] Estado b) `unclassified` rows hidden by default; `?all=1` toggle; header count reflects shown rows; distinct empty state when rows are only hidden
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3c.2 clients | `test/linear.test.ts`, `test/slack.test.ts` | Unit (fake fetch) | 167/167 | Failed (methods missing) | 173/173 | shape, cursors, malformed nodes, cache/in-flight/failure replay, not_found/error/429 | `linear.ts` generalized: shared `fetchAll` + `memo` per list |
+| 3c.1 | `test/people.test.ts` | Unit (real store) | 173/173 | Failed (module missing) | 182/182 | case-insensitive email, no email, inactive, manual kept, later joiner, partial failure, id format, clear paths | Email trimmed once |
+| 3c.3-3c.4, Estado | `test/admin.test.ts`, `test/store.test.ts` | Integration (ephemeral server) | 184/195 | 11 failing | 196/196 | see above | removed unused import |
+| 3c.5 | `test/app.test.ts` | Integration | 196 | n/a (characterization) | passes | matched vs unmatched | none |
+
+### Deviations from design/tasks
+- Only ACTIVE Linear users are synced/listed; inactive users are never looked up. Existing rows are kept.
+- People GET pulls active Linear users into the store as `unmatched` (name/email only) so an override can be set before the first sync. Lookup happens only on the sync button, never per event.
+- `syncPeople` never overwrites a manual Slack id (name/email refresh only). A failed lookup (e.g. rate limit) keeps the stored row, is counted as `failed` and flashes `synced-partial`; users with no stored row stay unstored in that case.
+- Clearing an override = submitting the override form with an empty id; it re-runs email matching. If Slack cannot be queried the manual mapping is kept (`slack-error`). Blank id on a non-manual row answers `invalid-slack-id`.
+- Override input is a free text field (`pattern="[UW][A-Z0-9]+"`, also validated server-side), not a select: no `users.list` call was added (out of scope, avoids more Slack scopes/calls).
+- Task file `test/people.test.ts`/`src/people.ts` match the plan; branch is `feat/kamaiti-80-admin-people` (not `feat/3c-admin-people`).
+- Estado b) uses a store option `recentEvents(limit, { hideUnclassified })` so the limit of 50 applies after filtering.
+- Singular header "Ultimo evento" when exactly one row is shown.
+- People and Estado changes share the third commit (they interleave in `admin.ts` and `admin.test.ts`).
+- Size: 610 additions + 57 deletions (~667 changed excl. openspec), above the ~400 budget (tests ~55%). Boundaries: clients / people rules / admin UI.
+
+### Status
+Slice 3c: 5/5 tasks complete (37/37 across 1a-3c). Slices 4a-6 remain. Suite 196/196, typecheck clean.
