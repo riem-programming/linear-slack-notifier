@@ -161,3 +161,27 @@ Completed: 4a.1, 4a.3 (POST part), 4a.4 (store and POST). Deferred to 4b: 4a.2 (
 - `POST /admin/channels/:id/projects` reads repeated `project` fields via `URLSearchParams.getAll`; `readForm` now returns the `URLSearchParams` and callers derive the record with `parseForm`. Validation (id format `^[A-Z0-9]{1,32}$` after safe decode, channel exists, at most 200 unique projects, every project exists) runs before the single transaction.
 - Old `/admin/channels/link` and `/unlink` routes and the old Canales UI are untouched (4b replaces them).
 - The GET sheet page (4a.2) was out of the requested scope for this batch and moves to 4b.
+
+### Update on slice 4a (closed in 4b)
+- 4a.2 (GET sheet page) and the removal of `/admin/channels/link` and `/unlink` landed in 4b.
+
+## Batch 8: Slice 4b (branch `feat/kamaiti-100-admin-canales-screen`, stacked on slice 4a, Linear KAMAITI-100)
+
+Completed: 4b.1, 4b.2, 4b.3, 4b.4, plus deferred 4a.2 and the old route removal. Remaining: slices 5a and 5b.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 4a review nit | `test/store.test.ts` | Store (Proxy on db) | 377 existing | Written, failed (ROLLBACK error masked the original) | 378/378 | original error surfaced when ROLLBACK throws | None needed |
+| 4b.1 | `test/admin-channels.test.ts` | Unit (pure) | 378 existing | Written, failed (module missing) | 387/387 | `filterChannels` accents/case/blank/no match; Con/Sin proyectos order; chips with remove form (remaining ids plus csrf); bot pills; hostile names and query escaped; empty and Linear-down states | None needed |
+| 4b.2 | `test/admin-channels.test.ts`, `test/admin.test.ts` | Unit and app | 378 existing | Written, 5 failed | 388/388 | `X-Admin-Fragment` returns the sheet only (no shell), full page otherwise, both `no-store`; pre-checked list and "También en #x" hint; filter keeps hidden linked projects as hidden inputs; 404 for unknown, lowercase, malformed and encoded ids; anonymous GET redirects with `next`; `data-sheet` links; old link/unlink routes answer 404 | Old link/unlink tests replaced by chip-removal and Origin/csrf tests on the projects route |
+| 4b.3 | covered above | | | | | | `channelsPage`, `filterChannels`, sheet renderers moved from `admin.ts` to `admin-channels.ts`; `channelsPost` reduced to `channelsRefresh` |
+| 4b.4 | `test/admin.test.ts` | App (asset served) | | | 388/388, typecheck clean | | |
+
+### Notes and deviations
+- The new module is `src/admin-channels.ts` (it did not exist in 4a, where the sheet handler lived in `admin.ts`).
+- Search on the channels page is a GET `?q=` filter by name (cut to 100 chars, `foldText`).
+- The sheet search is also a GET; with a filter active, linked projects that are hidden travel as hidden inputs, so saving never unlinks them. Without JS, unsaved checkbox changes are lost when searching (a full reload).
+- `admin.js` (about 45 lines): delegated click on `a[data-sheet]`, fetch with `X-Admin-Fragment: 1`, one `<dialog>`, `showModal()`, closes via `[data-close]`, backdrop click and native Esc, focus to the search field and back to the opener; a redirect (session ended), non-2xx or fetch error falls back to `location.href`. It has no browser test (no DOM test infra); a manual JS ON/OFF check on staging is required, as tasks.md states.
+- Chip remove is a POST to `/admin/channels/:id/projects` with the remaining ids (flash "Proyectos del canal guardados."). Flash keys `linked`, `unlinked`, `exists`, `not-found` were removed with their routes. `store.link/unlink` remain in the store.
+- The sheet fragment reuses the `sheet` component, so it keeps its "Cerrar" link next to Cancelar/Guardar.
