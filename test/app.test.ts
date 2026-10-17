@@ -320,15 +320,16 @@ test("a store failure while finishing the event is logged and never rejects the 
 });
 
 test("a missing or repeated Linear-Delivery header logs a warning but still processes the event", async () => {
-  const warnings: string[] = [];
+  const logged: string[] = [];
+  // Only delivery warnings count: the disabled-admin warning is also logged at boot.
+  const warnings = (): string[] => logged.filter((line) => line.includes("Linear-Delivery"));
   await withApp(async (h) => {
     await deliver(h, payload(1_000_000));
     assert.equal(h.sent.length, 1);
-    assert.equal(warnings.length, 1);
-    assert.match(warnings[0] as string, /Linear-Delivery/);
+    assert.equal(warnings().length, 1);
     await deliver(h, payload(1_000_000), "d-1");
-    assert.equal(warnings.length, 1);
-  }, { logger: { ...silent, warn: (line) => void warnings.push(line) } });
+    assert.equal(warnings().length, 1);
+  }, { logger: { ...silent, warn: (line) => void logged.push(line) } });
 });
 
 test("a created notice still in flight suppresses the assigned notice that follows it", async () => {

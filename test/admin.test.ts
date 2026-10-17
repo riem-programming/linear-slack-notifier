@@ -3,20 +3,20 @@ import assert from "node:assert/strict";
 import { assertNoInlineCode } from "./helpers/csp.ts";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.ts";
-import { csrfToken } from "../src/auth.ts";
 import { openDb } from "../src/db.ts";
+import { csrfFor, signSession, verifySession } from "../src/session.ts";
 import { createStore } from "../src/store.ts";
 import type { EventEntry, Store } from "../src/store.ts";
 
 const PASSWORD = "hunter2-pass";
+const SECRET = "s3cr3t-".repeat(6);
 const silent = { info: () => {}, warn: () => {}, error: () => {} };
-const auth = (password = PASSWORD): Record<string, string> => ({
-  authorization: `Basic ${Buffer.from(`admin:${password}`).toString("base64")}`,
-});
+const FORM = { "content-type": "application/x-www-form-urlencoded" };
 
-type Harness = { base: string; store: Store; host: string };
+type Harness = { base: string; store: Store; host: string; auth: Record<string, string>; cookie: string; csrf: string };
 type Options = {
   adminPassword?: string | undefined;
+  sessionSecret?: string | null | undefined;
   wrapStore?: (store: Store) => Store;
   logs?: string[];
   channels?: () => Promise<{ id: string; name: string; isMember: boolean }[]>;
@@ -24,6 +24,18 @@ type Options = {
   users?: () => Promise<{ id: string; name: string; email: string | null; active: boolean }[]>;
   lookup?: (email: string) => Promise<string | null>;
   envLabel?: string | null;
+  now?: () => number;
+};
+
+// Logs in through the real endpoint and returns the session cookie plus the CSRF token its pages render.
+const login = async (base: string, host: string, password = PASSWORD): Promise<{ cookie: string; csrf: string }> => {
+  const res = await fetch(`${base}/admin/login`, {
+    method: "POST", redirect: "manual", headers: { ...FORM, origin: `http://${host}` }, body: new URLSearchParams({ password }).toString(),
+  });
+  const cookie = (res.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+  if (res.status !== 303 || !cookie.startsWith("nh_session=")) return { cookie: "", csrf: "" };
+  const page = await (await fetch(`${base}/admin/channels`, { headers: { cookie } })).text();
+  return { cookie, csrf: /name="csrf" value="([0-9a-f]+)"/.exec(page)?.[1] ?? "" };
 };
 
 const withApp = async (run: (h: Harness) => Promise<void>, options: Options = {}): Promise<void> => {
@@ -39,12 +51,17 @@ const withApp = async (run: (h: Harness) => Promise<void>, options: Options = {}
     },
     linear: { listProjects: options.projects ?? (async () => []), listUsers: options.users ?? (async () => []) },
     adminPassword: "adminPassword" in options ? options.adminPassword : PASSWORD,
+    sessionSecret: "sessionSecret" in options ? options.sessionSecret : SECRET,
     timeZone: "America/Lima", logger, adminEnvLabel: options.envLabel ?? null,
+    ...(options.now ? { now: options.now } : {}),
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const port = (server.address() as AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+  const host = `127.0.0.1:${port}`;
   try {
-    await run({ base: `http://127.0.0.1:${port}`, store, host: `127.0.0.1:${port}` });
+    const { cookie, csrf } = await login(base, host);
+    await run({ base, store, host, auth: { cookie }, cookie, csrf });
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -58,35 +75,71 @@ const seedEvent = (store: Store, overrides: Partial<EventEntry> = {}): void => {
   });
 };
 
-test("admin routes require credentials and send a WWW-Authenticate challenge", () =>
+const attempt = (h: { base: string; host: string }, password: string, extra: Record<string, string> = {}, fields: Record<string, string> = {}): Promise<Response> =>
+  fetch(`${h.base}/admin/login`, {
+    method: "POST", redirect: "manual", headers: { ...FORM, origin: `http://${h.host}`, ...extra }, body: new URLSearchParams({ password, ...fields }).toString(),
+  });
+
+test("an unauthenticated GET redirects to the login page with an allow-listed next and exposes no admin data", () =>
   withApp(async ({ base }) => {
-    for (const path of ["/admin", "/admin/status", "/admin/channels", "/admin/people", "/admin/unknown", "/admin/"]) {
+    const cases: [string, string][] = [
+      ["/admin/people", "/admin/login?next=%2Fadmin%2Fpeople"],
+      ["/admin/status?all=1", "/admin/login?next=%2Fadmin%2Fstatus%3Fall%3D1"],
+      ["/admin", "/admin/login?next=%2Fadmin"],
+      ["/admin/a..b", "/admin/login"],
+    ];
+    for (const [path, location] of cases) {
       const res = await fetch(`${base}${path}`, { redirect: "manual" });
-      assert.equal(res.status, 401, path);
-      assert.match(res.headers.get("www-authenticate") ?? "", /^Basic realm="[^"]+"/);
+      assert.equal(res.status, 303, path);
+      assert.equal(res.headers.get("location"), location, path);
+      assert.equal(res.headers.get("www-authenticate"), null);
+      assert.equal(res.headers.get("cache-control"), "no-store");
       assert.doesNotMatch(await res.text(), /Estado|KAM-/);
     }
   }));
 
-test("wrong credentials get 401, also for form POSTs", () =>
-  withApp(async ({ base, host }) => {
-    const get = await fetch(`${base}/admin/status`, { headers: auth("nope") });
-    assert.equal(get.status, 401);
-    const post = await fetch(`${base}/admin/channels/link`, {
-      method: "POST", headers: { ...auth("nope"), origin: `http://${host}` }, body: "x=1",
+test("an unauthenticated POST gets 401 and changes nothing", () =>
+  withApp(async ({ base, host, store }) => {
+    store.upsertChannel({ id: "C1", name: "test", isMember: true });
+    store.upsertProject({ id: "p1", name: "Web" });
+    const res = await fetch(`${base}/admin/channels/link`, {
+      method: "POST", redirect: "manual", headers: { ...FORM, origin: `http://${host}` }, body: "channel=C1&project=p1",
     });
-    assert.equal(post.status, 401);
+    assert.equal(res.status, 401);
+    assert.equal(res.headers.get("www-authenticate"), null);
+    assert.deepEqual(store.projectsForChannel("C1"), []);
   }));
 
-test("an unset or empty ADMIN_PASSWORD disables the admin instead of opening it", async () => {
-  for (const adminPassword of [undefined, ""]) {
-    await withApp(async ({ base }) => {
-      for (const headers of [{}, auth(""), auth("anything")]) {
-        const res = await fetch(`${base}/admin/status`, { headers });
-        assert.equal(res.status, 403);
-        assert.equal(res.headers.get("www-authenticate"), null);
+test("a Basic Authorization header grants nothing and is never challenged", () =>
+  withApp(async ({ base }) => {
+    const authorization = `Basic ${Buffer.from(`admin:${PASSWORD}`).toString("base64")}`;
+    for (const path of ["/admin/status", "/admin/channels"]) {
+      const res = await fetch(`${base}${path}`, { headers: { authorization }, redirect: "manual" });
+      assert.equal(res.status, 303, path);
+      assert.match(res.headers.get("location") ?? "", /^\/admin\/login/);
+      assert.equal(res.headers.get("www-authenticate"), null);
+    }
+  }));
+
+test("a missing or short SESSION_SECRET or a missing ADMIN_PASSWORD disables every admin route and warns by name", async () => {
+  const variants: [Options, RegExp][] = [
+    [{ sessionSecret: null }, /SESSION_SECRET/],
+    [{ sessionSecret: "x".repeat(31) }, /SESSION_SECRET/],
+    [{ adminPassword: undefined }, /ADMIN_PASSWORD/],
+    [{ adminPassword: "" }, /ADMIN_PASSWORD/],
+  ];
+  for (const [options, variable] of variants) {
+    const logs: string[] = [];
+    await withApp(async ({ base, host }) => {
+      for (const path of ["/admin", "/admin/status", "/admin/login", "/admin/logout", "/admin/assets/admin.css"]) {
+        assert.equal((await fetch(`${base}${path}`, { redirect: "manual" })).status, 403, path);
       }
-    }, { adminPassword });
+      assert.equal((await attempt({ base, host }, PASSWORD)).status, 403);
+      assert.equal((await fetch(`${base}/health`)).status, 200);
+      assert.equal((await fetch(`${base}/webhooks/linear`, { method: "POST", body: "{}" })).status, 401);
+    }, { ...options, logs });
+    assert.ok(logs.some((line) => variable.test(line)), `warning for ${Object.keys(options).join()}`);
+    assert.doesNotMatch(logs.join("\n"), new RegExp(`${PASSWORD}|${SECRET}|x{31}`));
   }
 });
 
@@ -99,13 +152,209 @@ test("public routes do not need admin credentials", () =>
     assert.equal((await fetch(`${base}/adminx`)).status, 404);
   }));
 
-test("valid credentials: /admin redirects to status, other pages render with security headers", () =>
+test("the login page renders bare with the password field, the session notice and an escaped next", () =>
   withApp(async ({ base }) => {
-    const root = await fetch(`${base}/admin`, { headers: auth(), redirect: "manual" });
+    const res = await fetch(`${base}/admin/login?next=${encodeURIComponent('/admin/people?q="onfocus=1')}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    const text = await res.text();
+    assert.match(text, /La sesión dura 8 horas en este navegador\./);
+    assert.match(text, /<input[^>]*type="password"/);
+    assert.match(text, /name="password"/);
+    assert.doesNotMatch(text, /class="sidebar"/);
+    assertNoInlineCode(text, "login");
+    // The value is escaped, so a quote cannot break out of the attribute.
+    assert.match(text, /name="next" value="\/admin\/people\?q=&quot;onfocus=1"/);
+    assert.match(await (await fetch(`${base}/admin/login?next=https://evil.example`)).text(), /name="next" value="\/admin\/status"/);
+    assert.match(await (await fetch(`${base}/admin/login?next=/admin/people`)).text(), /name="next" value="\/admin\/people"/);
+  }));
+
+test("a valid session on the login page redirects to the safe next", () =>
+  withApp(async ({ base, auth }) => {
+    const res = await fetch(`${base}/admin/login?next=/admin/people`, { headers: auth, redirect: "manual" });
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get("location"), "/admin/people");
+    assert.equal((await fetch(`${base}/admin/login`, { headers: auth, redirect: "manual" })).headers.get("location"), "/admin/status");
+  }));
+
+test("a correct password sets the session cookie and redirects to the validated next", () =>
+  withApp(async (h) => {
+    const res = await attempt(h, PASSWORD, {}, { next: "/admin/channels" });
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get("location"), "/admin/channels");
+    const cookie = res.headers.get("set-cookie") ?? "";
+    assert.match(cookie, /^nh_session=[^;]+; HttpOnly; Secure; SameSite=Strict; Path=\/admin; Max-Age=28800$/);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    const page = await fetch(`${h.base}/admin/status`, { headers: { cookie: cookie.split(";")[0] as string } });
+    assert.equal(page.status, 200);
+    for (const next of ["https://evil.example/admin", "//evil.example", "/admin/../x", "/admin/login", ""]) {
+      assert.equal((await attempt(h, PASSWORD, {}, { next })).headers.get("location"), "/admin/status", next);
+    }
+  }));
+
+test("a wrong password re-renders the login page with 401, no cookie and the Spanish message", () =>
+  withApp(async (h) => {
+    const res = await attempt(h, "nope", {}, { next: "/admin/people" });
+    assert.equal(res.status, 401);
+    assert.equal(res.headers.get("set-cookie"), null);
+    const text = await res.text();
+    assert.match(text, /Contraseña incorrecta\. Inténtalo de nuevo\./);
+    assert.match(text, /name="next" value="\/admin\/people"/);
+    assert.doesNotMatch(text, /nope/);
+  }));
+
+test("the sixth attempt from one address gets 429 with Retry-After and the password is not even checked", () =>
+  withApp(async (h) => {
+    for (let i = 0; i < 5; i += 1) assert.equal((await attempt(h, "wrong")).status, 401, `attempt ${i + 1}`);
+    const limited = await attempt(h, PASSWORD);
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers.get("set-cookie"), null);
+    const retry = Number(limited.headers.get("retry-after"));
+    assert.ok(Number.isInteger(retry) && retry > 0 && retry <= 900, `retry-after ${retry}`);
+    assert.match(await limited.text(), /Demasiados intentos\. Espera unos minutos e inténtalo de nuevo\./);
+  }));
+
+test("a limited attempt is not counted: the lockout ends exactly 15 minutes after the fifth failure", () => {
+  let at = Date.parse("2026-10-17T15:00:00.000Z");
+  return withApp(async (h) => {
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal((await attempt(h, "wrong")).status, 401);
+      at += 1000;
+    }
+    // Failures at +0s..+4s; the oldest counted one leaves the window at +900s.
+    at += 100_000;
+    const first = await attempt(h, "wrong");
+    assert.equal(first.status, 429);
+    const wait = Number(first.headers.get("retry-after"));
+    assert.equal(wait, 900 - 105);
+    // Hammering while limited must not push the end of the lockout.
+    for (let i = 0; i < 5; i += 1) assert.equal((await attempt(h, "wrong")).status, 429);
+    assert.equal(Number((await attempt(h, "wrong")).headers.get("retry-after")), wait);
+    at += wait * 1000;
+    assert.equal((await attempt(h, PASSWORD)).status, 303);
+  }, { now: () => at });
+});
+
+test("30 failures from different addresses trigger the global 429 for everyone", () =>
+  withApp(async (h) => {
+    for (let i = 0; i < 30; i += 1) {
+      assert.equal((await attempt(h, "wrong", { "x-forwarded-for": `10.0.${Math.floor(i / 250)}.${i}` })).status, 401, `failure ${i + 1}`);
+    }
+    const fresh = await attempt(h, PASSWORD, { "x-forwarded-for": "203.0.113.9" });
+    assert.equal(fresh.status, 429);
+    assert.equal(fresh.headers.get("set-cookie"), null);
+    assert.ok(Number(fresh.headers.get("retry-after")) > 0);
+  }));
+
+test("a SESSION_SECRET that is short once trimmed disables the admin", () =>
+  withApp(async ({ base }) => {
+    assert.equal((await fetch(`${base}/admin/login`)).status, 403);
+  }, { sessionSecret: ` ${"x".repeat(31)} ` }));
+
+test("the last X-Forwarded-For hop is the one counted, and a success clears that address", () =>
+  withApp(async (h) => {
+    for (let i = 0; i < 5; i += 1) await attempt(h, "wrong", { "x-forwarded-for": `${i}.0.0.1, 9.9.9.9` });
+    assert.equal((await attempt(h, PASSWORD, { "x-forwarded-for": "1.1.1.1, 9.9.9.9" })).status, 429);
+    assert.equal((await attempt(h, PASSWORD, { "x-forwarded-for": "9.9.9.8" })).status, 303);
+    for (let i = 0; i < 4; i += 1) await attempt(h, "wrong", { "x-forwarded-for": "7.7.7.7" });
+    assert.equal((await attempt(h, PASSWORD, { "x-forwarded-for": "7.7.7.7" })).status, 303);
+    for (let i = 0; i < 4; i += 1) await attempt(h, "wrong", { "x-forwarded-for": "7.7.7.7" });
+    assert.equal((await attempt(h, "wrong", { "x-forwarded-for": "7.7.7.7" })).status, 401);
+  }));
+
+test("a cross-origin or originless login is rejected before the limiter and sets no cookie", () =>
+  withApp(async (h) => {
+    for (let i = 0; i < 8; i += 1) {
+      const res = await fetch(`${h.base}/admin/login`, {
+        method: "POST", redirect: "manual", headers: { ...FORM, ...(i % 2 ? { origin: "https://evil.example" } : {}) }, body: `password=${PASSWORD}`,
+      });
+      assert.equal(res.status, 403);
+      assert.equal(res.headers.get("set-cookie"), null);
+    }
+    assert.equal((await attempt(h, PASSWORD)).status, 303);
+  }));
+
+test("logout needs a session, the Origin and the session CSRF; it clears the cookie and returns to login", () =>
+  withApp(async (h) => {
+    const post = (headers: Record<string, string>, body: string) =>
+      fetch(`${h.base}/admin/logout`, { method: "POST", redirect: "manual", headers: { ...FORM, ...headers }, body });
+    const own = { ...h.auth, origin: `http://${h.host}` };
+    assert.equal((await post({ origin: `http://${h.host}` }, `csrf=${h.csrf}`)).status, 401);
+    assert.equal((await post({ ...h.auth, origin: "https://evil.example" }, `csrf=${h.csrf}`)).status, 403);
+    assert.equal((await post(h.auth, `csrf=${h.csrf}`)).status, 403);
+    assert.equal((await post(own, "x=1")).status, 403);
+    assert.equal((await post(own, `csrf=${"0".repeat(64)}`)).status, 403);
+    assert.equal((await fetch(`${h.base}/admin/status`, { headers: h.auth })).status, 200);
+    const out = await post(own, `csrf=${h.csrf}`);
+    assert.equal(out.status, 303);
+    assert.equal(out.headers.get("location"), "/admin/login?status=logged-out");
+    assert.match(out.headers.get("set-cookie") ?? "", /^nh_session=; HttpOnly; Secure; SameSite=Strict; Path=\/admin; Max-Age=0$/);
+    assert.match(await (await fetch(`${h.base}/admin/login?status=logged-out`)).text(), /Sesión cerrada\./);
+  }));
+
+test("the shell renders the logout form carrying the session-bound CSRF token", () =>
+  withApp(async (h) => {
+    const text = await (await fetch(`${h.base}/admin/status`, { headers: h.auth })).text();
+    assert.match(text, /<form method="post" action="\/admin\/logout">/);
+    assert.match(text, new RegExp(`name="csrf" value="${h.csrf}"`));
+    assert.match(h.csrf, /^[0-9a-f]{64}$/);
+  }));
+
+test("a CSRF token minted for another session is rejected", () =>
+  withApp(async (h) => {
+    const other = csrfFor(SECRET, { iat: 1, exp: 2, pf: "x" });
+    const res = await fetch(`${h.base}/admin/channels/refresh`, {
+      method: "POST", redirect: "manual", headers: { ...FORM, ...h.auth, origin: `http://${h.host}` }, body: `csrf=${other}`,
+    });
+    assert.equal(res.status, 403);
+  }));
+
+test("tampered, expired and password-rotated sessions are treated as no session", () => {
+  const now = Date.parse("2026-10-17T15:00:00.000Z");
+  return withApp(async ({ base }) => {
+    const hours = (n: number): number => now - n * 3_600_000;
+    const cookies = [
+      `nh_session=${signSession(SECRET, PASSWORD, hours(9))}`,
+      `nh_session=${signSession(SECRET, "old-password", now)}`,
+      `nh_session=${signSession("another-secret-".repeat(3), PASSWORD, now)}`,
+      `nh_session=${signSession(SECRET, PASSWORD, now)}x`,
+      "nh_session=garbage",
+    ];
+    for (const cookie of cookies) {
+      const res = await fetch(`${base}/admin/status`, { headers: { cookie }, redirect: "manual" });
+      assert.equal(res.status, 303, cookie.slice(0, 30));
+    }
+    const fresh = signSession(SECRET, PASSWORD, hours(7));
+    assert.ok(verifySession(fresh, SECRET, PASSWORD, now));
+    assert.equal((await fetch(`${base}/admin/status`, { headers: { cookie: `nh_session=${fresh}` } })).status, 200);
+  }, { now: () => now });
+});
+
+test("login attempts never log the password, the cookie or the secret", async () => {
+  const logs: string[] = [];
+  await withApp(async (h) => {
+    await attempt(h, "wrong-password-xyz");
+    await fetch(`${h.base}/admin/status`, { headers: { cookie: "nh_session=forged.value" }, redirect: "manual" });
+  }, { logs });
+  assert.doesNotMatch(logs.join("\n"), /wrong-password-xyz|forged\.value|nh_session=/);
+});
+
+test("admin pages never contain the admin password, the cookie value or the secret", () =>
+  withApp(async ({ base, auth, cookie }) => {
+    const value = cookie.slice("nh_session=".length);
+    for (const path of ["/admin/status", "/admin/channels", "/admin/people"]) {
+      const text = await (await fetch(`${base}${path}`, { headers: auth })).text();
+      assert.ok(!text.includes(PASSWORD) && !text.includes(value) && !text.includes(SECRET), path);
+    }
+  }));
+
+test("valid session: /admin redirects to status, other pages render with security headers", () =>
+  withApp(async ({ base, auth }) => {
+    const root = await fetch(`${base}/admin`, { headers: auth, redirect: "manual" });
     assert.equal(root.status, 303);
     assert.equal(root.headers.get("location"), "/admin/status");
     for (const path of ["/admin/status", "/admin/channels", "/admin/people"]) {
-      const res = await fetch(`${base}${path}?x=1`, { headers: auth() });
+      const res = await fetch(`${base}${path}?x=1`, { headers: auth });
       assert.equal(res.status, 200, path);
       assert.match(res.headers.get("content-type") ?? "", /^text\/html/);
       assert.equal(res.headers.get("x-frame-options"), "DENY");
@@ -114,7 +363,7 @@ test("valid credentials: /admin redirects to status, other pages render with sec
       assert.equal(res.headers.get("x-content-type-options"), "nosniff");
       assert.match(await res.text(), /href="\/admin\/channels"/);
     }
-    assert.equal((await fetch(`${base}/admin/unknown`, { headers: auth() })).status, 404);
+    assert.equal((await fetch(`${base}/admin/unknown`, { headers: auth })).status, 404);
   }));
 
 const CSP =
@@ -122,9 +371,9 @@ const CSP =
   "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
 
 test("admin pages send the strict CSP without unsafe-inline", () =>
-  withApp(async ({ base }) => {
+  withApp(async ({ auth, base }) => {
     for (const path of ["/admin/status", "/admin/channels", "/admin/people"]) {
-      const csp = (await fetch(`${base}${path}`, { headers: auth() })).headers.get("content-security-policy");
+      const csp = (await fetch(`${base}${path}`, { headers: auth })).headers.get("content-security-policy");
       assert.equal(csp, CSP, path);
       assert.doesNotMatch(csp ?? "", /unsafe-inline/);
     }
@@ -159,7 +408,7 @@ test("asset 200 and 404 responses carry the admin security headers without losin
   }));
 
 test("every admin page renders in the shell without inline styles, style tags or inline handlers", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     store.upsertChannel({ id: "C1", name: "general", isMember: false });
     store.upsertProject({ id: "p1", name: "Proyecto" });
     store.upsertPerson({ linearUserId: "u1", name: "Ana", email: "ana@x.com", slackUserId: null, matchSource: "unmatched" });
@@ -167,22 +416,22 @@ test("every admin page renders in the shell without inline styles, style tags or
     seedEvent(store, { outcome: "failed", reason: "post-failed", targets: [{ channel: "C1", outcome: "failed", error: "boom" }] });
     const paths = ["/admin/status", "/admin/status?all=1", "/admin/channels", "/admin/channels?status=linked", "/admin/people", "/admin/people?status=invalid-slack-id"];
     for (const path of paths) {
-      const text = await (await fetch(`${base}${path}`, { headers: auth() })).text();
+      const text = await (await fetch(`${base}${path}`, { headers: auth })).text();
       assert.match(text, /class="sidebar"/, path);
       assertNoInlineCode(text, path);
     }
   }, { projects: async () => [{ id: "p1", name: "Proyecto" }], users: async () => [{ id: "u1", name: "Ana", email: "ana@x.com", active: true }] }));
 
 test("the shell shows the env label only when configured, and the time zone", () =>
-  withApp(async ({ base }) => {
-    const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
+  withApp(async ({ auth, base }) => {
+    const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
     assert.match(text, /<span class="env-label">Staging<\/span>/);
     assert.match(text, /America\/Lima/);
   }, { envLabel: "Staging" }));
 
 test("the shell hides the env label when it is not configured", () =>
-  withApp(async ({ base }) => {
-    assert.doesNotMatch(await (await fetch(`${base}/admin/status`, { headers: auth() })).text(), /env-label/);
+  withApp(async ({ auth, base }) => {
+    assert.doesNotMatch(await (await fetch(`${base}/admin/status`, { headers: auth })).text(), /env-label/);
   }));
 
 test("assets answer 403 when the admin is disabled", () =>
@@ -191,13 +440,13 @@ test("assets answer 403 when the admin is disabled", () =>
   }, { adminPassword: undefined }));
 
 test("status page shows an empty state when there are no events", () =>
-  withApp(async ({ base }) => {
-    const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
+  withApp(async ({ auth, base }) => {
+    const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
     assert.match(text, /Aún no hay eventos/);
   }));
 
 test("status lists events newest first with Lima time, kind, issue, outcome, reason and targets", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     store.upsertChannel({ id: "C1", name: "test", isMember: true });
     seedEvent(store, { issueIdentifier: "KAM-1", issueTitle: "Listo", reason: null });
     seedEvent(store, { kind: "assigned", issueIdentifier: "KAM-2", issueTitle: "Sin canal", projectId: "p2", outcome: "skipped", reason: "project-not-linked", targets: [] });
@@ -205,7 +454,7 @@ test("status lists events newest first with Lima time, kind, issue, outcome, rea
       kind: "completed", issueIdentifier: "KAM-3", issueTitle: "Falla", outcome: "failed", reason: "post-failed",
       targets: [{ channel: "C1", outcome: "failed", error: "not_in_channel" }, { channel: "C2", outcome: "notified" }],
     });
-    const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
     assert.ok(text.indexOf("KAM-3") < text.indexOf("KAM-2") && text.indexOf("KAM-2") < text.indexOf("KAM-1"));
     assert.match(text, /2026-10-17 10:04:05/);
     assert.match(text, /Creada/);
@@ -222,10 +471,10 @@ test("status lists events newest first with Lima time, kind, issue, outcome, rea
   }));
 
 test("status shows at most the 50 most recent events and falls back to the raw reason code", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     for (let i = 1; i <= 55; i += 1) seedEvent(store, { issueIdentifier: `KAM-${i}` });
     seedEvent(store, { kind: "mystery", outcome: "skipped", reason: "weird-code", issueIdentifier: null, issueTitle: null });
-    const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
     assert.equal((text.match(/<tr data-event/g) ?? []).length, 50);
     assert.match(text, /weird-code/);
     assert.match(text, /mystery/);
@@ -233,13 +482,13 @@ test("status shows at most the 50 most recent events and falls back to the raw r
   }));
 
 test("status escapes hostile titles, reasons and channel errors", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     store.upsertChannel({ id: "<i>C</i>", name: "<b>canal</b>", isMember: true });
     seedEvent(store, {
       issueTitle: "<script>alert(1)</script>", issueIdentifier: "<b>K</b>", outcome: "failed", reason: "<img src=x>",
       targets: [{ channel: "<i>C</i>", outcome: "failed", error: "<svg onload=1>" }],
     });
-    const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
     assert.doesNotMatch(text, /<script>alert|<b>K|<img src|<i>C|<b>canal|<svg onload/);
     assert.match(text, /#&lt;b&gt;canal&lt;\/b&gt;/);
     assert.match(text, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
@@ -247,8 +496,8 @@ test("status escapes hostile titles, reasons and channel errors", () =>
 
 test("a store failure shows a generic error and never leaks the message, secrets or credentials", async () => {
   const logs: string[] = [];
-  await withApp(async ({ base }) => {
-    const res = await fetch(`${base}/admin/status`, { headers: auth() });
+  await withApp(async ({ auth, base }) => {
+    const res = await fetch(`${base}/admin/status`, { headers: auth });
     assert.equal(res.status, 500);
     const text = await res.text();
     assert.match(text, /No se pudo cargar/);
@@ -262,37 +511,37 @@ test("a store failure shows a generic error and never leaks the message, secrets
 });
 
 test("pages never contain the admin password or the authorization header", () =>
-  withApp(async ({ base }) => {
-    const header = auth().authorization as string;
+  withApp(async ({ auth, base }) => {
+    const header = auth.authorization as string;
     for (const path of ["/admin/status", "/admin/channels", "/admin/people"]) {
-      const text = await (await fetch(`${base}${path}`, { headers: auth() })).text();
+      const text = await (await fetch(`${base}${path}`, { headers: auth })).text();
       assert.ok(!text.includes(PASSWORD) && !text.includes(header), path);
     }
   }));
 
 test("form POSTs are rejected without a matching Origin or a valid csrf token", () =>
-  withApp(async ({ base, host }) => {
+  withApp(async ({ auth, base, host }) => {
     const post = (headers: Record<string, string>, body: string) =>
       fetch(`${base}/admin/channels/link`, {
-        method: "POST", headers: { ...auth(), "content-type": "application/x-www-form-urlencoded", ...headers }, body,
+        method: "POST", headers: { ...auth, "content-type": "application/x-www-form-urlencoded", ...headers }, body,
       });
     assert.equal((await post({}, "csrf=x")).status, 403);
     assert.equal((await post({ origin: "https://evil.example" }, "csrf=x")).status, 403);
     assert.equal((await post({ origin: `http://${host}` }, "a=1")).status, 403);
     assert.equal((await post({ origin: `http://${host}` }, "csrf=wrong")).status, 403);
     // A cross-origin request cannot pass even with a valid-looking token.
-    assert.equal((await post({ origin: "https://evil.example" }, `csrf=${csrfToken("guess")}`)).status, 403);
+    assert.equal((await post({ origin: "https://evil.example" }, `csrf=${"0".repeat(64)}`)).status, 403);
   }));
 
 const form = (fields: Record<string, string>): string => new URLSearchParams(fields).toString();
 
 // Posts like a browser: same-origin, urlencoded, with the token scraped from the rendered page.
 const submit = async (h: Harness, path: string, fields: Record<string, string>, token?: string): Promise<Response> => {
-  const page = await (await fetch(`${h.base}/admin/channels`, { headers: auth() })).text();
+  const page = await (await fetch(`${h.base}/admin/channels`, { headers: h.auth })).text();
   const csrf = token ?? /name="csrf" value="([0-9a-f]+)"/.exec(page)?.[1] ?? "missing";
   return fetch(`${h.base}${path}`, {
     method: "POST", redirect: "manual",
-    headers: { ...auth(), origin: `http://${h.host}`, "content-type": "application/x-www-form-urlencoded" },
+    headers: { ...h.auth, origin: `http://${h.host}`, "content-type": "application/x-www-form-urlencoded" },
     body: form({ csrf, ...fields }),
   });
 };
@@ -305,19 +554,19 @@ const seedChannels = (store: Store): void => {
 };
 
 test("channels page shows an empty state with the refresh form and a csrf token", () =>
-  withApp(async ({ base }) => {
-    const text = await (await fetch(`${base}/admin/channels`, { headers: auth() })).text();
+  withApp(async ({ auth, base }) => {
+    const text = await (await fetch(`${base}/admin/channels`, { headers: auth })).text();
     assert.match(text, /Aún no hay canales/);
     assert.match(text, /action="\/admin\/channels\/refresh"/);
     assert.match(text, /name="csrf" value="[0-9a-f]{64}"/);
   }));
 
 test("channels page lists channels with linked projects, membership labels and link/unlink forms", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     seedChannels(store);
     store.link("C1", "p1");
     store.link("C1", "p2");
-    const text = await (await fetch(`${base}/admin/channels`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/channels`, { headers: auth })).text();
     assert.match(text, /#test/);
     assert.match(text, /#ventas/);
     assert.match(text, /El bot participa/);
@@ -329,18 +578,18 @@ test("channels page lists channels with linked projects, membership labels and l
   }));
 
 test("channels page pulls the project list from Linear into the store", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     store.upsertChannel({ id: "C1", name: "test", isMember: true });
-    const text = await (await fetch(`${base}/admin/channels`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/channels`, { headers: auth })).text();
     assert.match(text, /<option value="px">Proyecto X<\/option>/);
     assert.deepEqual(store.listProjects(), [{ id: "px", name: "Proyecto X" }]);
   }, { projects: async () => [{ id: "px", name: "Proyecto X" }] }));
 
 test("when Linear is down the page still renders with a readable message and stored data", async () => {
   const logs: string[] = [];
-  await withApp(async ({ base, store }) => {
+  await withApp(async ({ auth, base, store }) => {
     seedChannels(store);
-    const res = await fetch(`${base}/admin/channels`, { headers: auth() });
+    const res = await fetch(`${base}/admin/channels`, { headers: auth });
     assert.equal(res.status, 200);
     const text = await res.text();
     assert.match(text, /No se pudo consultar Linear/);
@@ -357,7 +606,7 @@ test("refresh stores the channels listed by Slack and redirects with a status", 
     assert.equal(res.headers.get("location"), "/admin/channels?status=refreshed");
     assert.equal(res.headers.get("x-frame-options"), "DENY");
     assert.deepEqual(h.store.listChannels().map((c) => c.name), ["general", "privado"]);
-    const text = await (await fetch(`${h.base}/admin/channels?status=refreshed`, { headers: auth() })).text();
+    const text = await (await fetch(`${h.base}/admin/channels?status=refreshed`, { headers: h.auth })).text();
     assert.match(text, /Lista de canales actualizada/);
     assert.match(text, /#general/);
   }, { channels: async () => [{ id: "C9", name: "general", isMember: true }, { id: "G1", name: "privado", isMember: false }] }));
@@ -370,7 +619,7 @@ test("a Slack failure on refresh keeps the stored list and shows an error", asyn
     assert.equal(res.status, 303);
     assert.equal(res.headers.get("location"), "/admin/channels?status=slack-error");
     assert.equal(h.store.listChannels().length, 2);
-    const text = await (await fetch(`${h.base}/admin/channels?status=slack-error`, { headers: auth() })).text();
+    const text = await (await fetch(`${h.base}/admin/channels?status=slack-error`, { headers: h.auth })).text();
     assert.match(text, /No se pudo consultar Slack/);
     assert.match(text, /#ventas/);
     assert.doesNotMatch(logs.join(""), /xoxb-secret/);
@@ -411,10 +660,10 @@ test("channel POSTs enforce Origin and csrf and change nothing when rejected", (
     seedChannels(h.store);
     const post = (headers: Record<string, string>, body: string) =>
       fetch(`${h.base}/admin/channels/link`, {
-        method: "POST", redirect: "manual", headers: { ...auth(), "content-type": "application/x-www-form-urlencoded", ...headers }, body,
+        method: "POST", redirect: "manual", headers: { ...h.auth, "content-type": "application/x-www-form-urlencoded", ...headers }, body,
       });
     const fields = { channel: "C1", project: "p1" };
-    assert.equal((await post({ origin: "https://evil.example" }, form({ ...fields, csrf: csrfToken("guess") }))).status, 403);
+    assert.equal((await post({ origin: "https://evil.example" }, form({ ...fields, csrf: "0".repeat(64) }))).status, 403);
     assert.equal((await submit(h, "/admin/channels/link", fields, "forged")).status, 403);
     assert.equal((await post({ origin: `http://${h.host}` }, form(fields))).status, 403);
     assert.deepEqual(h.store.projectsForChannel("C1"), []);
@@ -423,11 +672,11 @@ test("channel POSTs enforce Origin and csrf and change nothing when rejected", (
 test("a cross-origin POST with a valid token is still rejected", () =>
   withApp(async (h) => {
     seedChannels(h.store);
-    const page = await (await fetch(`${h.base}/admin/channels`, { headers: auth() })).text();
+    const page = await (await fetch(`${h.base}/admin/channels`, { headers: h.auth })).text();
     const csrf = /name="csrf" value="([0-9a-f]+)"/.exec(page)?.[1] ?? "";
     const res = await fetch(`${h.base}/admin/channels/link`, {
       method: "POST", redirect: "manual",
-      headers: { ...auth(), origin: "https://evil.example", "content-type": "application/x-www-form-urlencoded" },
+      headers: { ...h.auth, origin: "https://evil.example", "content-type": "application/x-www-form-urlencoded" },
       body: form({ csrf, channel: "C1", project: "p1" }),
     });
     assert.equal(res.status, 403);
@@ -440,31 +689,31 @@ test("unknown POST routes under /admin answer 404 after the guards", () =>
   }));
 
 test("channels page escapes hostile names and ignores unknown status values", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     store.upsertChannel({ id: "C1", name: "<img src=x onerror=1>", isMember: true });
     store.upsertProject({ id: "p1", name: "<script>alert(1)</script>" });
     store.link("C1", "p1");
-    const text = await (await fetch(`${base}/admin/channels?status=<script>alert(2)</script>`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/channels?status=<script>alert(2)</script>`, { headers: auth })).text();
     assert.doesNotMatch(text, /<img src|<script>alert/);
     assert.match(text, /&lt;img src=x onerror=1&gt;/);
     assert.match(text, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   }));
 
 test("admin redirects carry the security headers and HEAD is advertised in Allow", () =>
-  withApp(async ({ base }) => {
-    const root = await fetch(`${base}/admin`, { headers: auth(), redirect: "manual" });
+  withApp(async ({ auth, base }) => {
+    const root = await fetch(`${base}/admin`, { headers: auth, redirect: "manual" });
     assert.equal(root.status, 303);
     assert.equal(root.headers.get("x-frame-options"), "DENY");
     assert.equal(root.headers.get("cache-control"), "no-store");
-    const put = await fetch(`${base}/admin/channels`, { method: "PUT", headers: auth() });
+    const put = await fetch(`${base}/admin/channels`, { method: "PUT", headers: auth });
     assert.equal(put.status, 405);
     assert.equal(put.headers.get("allow"), "GET, HEAD, POST");
   }));
 
 test("inherited object keys as status render no flash", () =>
-  withApp(async ({ base }) => {
+  withApp(async ({ auth, base }) => {
     for (const status of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
-      const res = await fetch(`${base}/admin/channels?status=${status}`, { headers: auth() });
+      const res = await fetch(`${base}/admin/channels?status=${status}`, { headers: auth });
       assert.equal(res.status, 200, status);
       assert.doesNotMatch(await res.text(), /role="status"|flash-ok"|flash-error" role/, status);
     }
@@ -486,9 +735,9 @@ const LINEAR_USERS = [
 const SEEDED_USERS = ["u1", "u2", "u3"].map((id) => ({ id, name: id, email: null, active: true }));
 
 test("people page lists users with auto, manual and unlinked states and the forms", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     seedPeople(store);
-    const text = await (await fetch(`${base}/admin/people`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/people`, { headers: auth })).text();
     assert.match(rowOf(text, "Luis"), /Automático[\s\S]*ULUIS/);
     assert.match(rowOf(text, "Ana"), /Manual[\s\S]*UANA/);
     assert.match(rowOf(text, "Beto"), /Sin vincular/);
@@ -499,8 +748,8 @@ test("people page lists users with auto, manual and unlinked states and the form
   }, { users: async () => SEEDED_USERS }));
 
 test("people page pulls active Linear users in as unlinked", () =>
-  withApp(async ({ base, store }) => {
-    const text = await (await fetch(`${base}/admin/people`, { headers: auth() })).text();
+  withApp(async ({ auth, base, store }) => {
+    const text = await (await fetch(`${base}/admin/people`, { headers: auth })).text();
     assert.match(text, /Luis/);
     assert.doesNotMatch(text, /Baja/);
     assert.match(rowOf(text, "Luis"), /Sin vincular/);
@@ -508,15 +757,15 @@ test("people page pulls active Linear users in as unlinked", () =>
   }, { users: async () => LINEAR_USERS }));
 
 test("people page shows an empty state when nobody is known yet", () =>
-  withApp(async ({ base }) => {
-    assert.match(await (await fetch(`${base}/admin/people`, { headers: auth() })).text(), /Aún no hay personas/);
+  withApp(async ({ auth, base }) => {
+    assert.match(await (await fetch(`${base}/admin/people`, { headers: auth })).text(), /Aún no hay personas/);
   }));
 
 test("people page keeps stored rows and explains when Linear is down, without leaking details", async () => {
   const logs: string[] = [];
-  await withApp(async ({ base, store }) => {
+  await withApp(async ({ auth, base, store }) => {
     seedPeople(store);
-    const res = await fetch(`${base}/admin/people`, { headers: auth() });
+    const res = await fetch(`${base}/admin/people`, { headers: auth });
     assert.equal(res.status, 200);
     const text = await res.text();
     assert.match(text, /No se pudo consultar Linear/);
@@ -533,7 +782,7 @@ test("sync matches Linear users to Slack by email and redirects with a status", 
     assert.equal(res.headers.get("location"), "/admin/people?status=synced");
     assert.equal(res.headers.get("x-frame-options"), "DENY");
     assert.deepEqual([h.store.getPerson("u1")?.slackUserId, h.store.getPerson("u1")?.matchSource], ["ULUIS", "auto"]);
-    const text = await (await fetch(`${h.base}/admin/people?status=synced`, { headers: auth() })).text();
+    const text = await (await fetch(`${h.base}/admin/people?status=synced`, { headers: h.auth })).text();
     assert.match(text, /Personas emparejadas/);
   }, { users: async () => LINEAR_USERS, lookup: async (email) => (email === "luis@kamailab.com" ? "ULUIS" : null) }));
 
@@ -587,8 +836,8 @@ test("people POSTs enforce Origin and csrf and change nothing when rejected", ()
     const fields = { user: "u3", slack: "UBETO1" };
     for (const path of ["/admin/people/override", "/admin/people/sync"]) {
       const post = (headers: Record<string, string>, body: string) =>
-        fetch(`${h.base}${path}`, { method: "POST", redirect: "manual", headers: { ...auth(), "content-type": "application/x-www-form-urlencoded", ...headers }, body });
-      assert.equal((await post({ origin: "https://evil.example" }, form({ ...fields, csrf: csrfToken("guess") }))).status, 403);
+        fetch(`${h.base}${path}`, { method: "POST", redirect: "manual", headers: { ...h.auth, "content-type": "application/x-www-form-urlencoded", ...headers }, body });
+      assert.equal((await post({ origin: "https://evil.example" }, form({ ...fields, csrf: "0".repeat(64) }))).status, 403);
       assert.equal((await post({ origin: `http://${h.host}` }, form(fields))).status, 403);
       assert.equal((await submit(h, path, fields, "forged")).status, 403);
     }
@@ -596,23 +845,23 @@ test("people POSTs enforce Origin and csrf and change nothing when rejected", ()
   }, { users: async () => LINEAR_USERS, lookup: async () => "UX" }));
 
 test("people page escapes hostile names, emails and ids", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     store.upsertPerson({ linearUserId: "u1", name: "<script>alert(1)</script>", email: "<i>x</i>@a.b", slackUserId: "<img src=x>", matchSource: "manual" });
-    const text = await (await fetch(`${base}/admin/people?status=<script>alert(2)</script>`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/people?status=<script>alert(2)</script>`, { headers: auth })).text();
     assert.doesNotMatch(text, /<script>alert|<i>x|<img src/);
     assert.match(text, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   }, { users: async () => SEEDED_USERS }));
 
 test("status hides unclassified events by default and the toggle shows or hides them again", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     seedEvent(store, { issueIdentifier: "KAM-1" });
     seedEvent(store, { kind: "unclassified", issueIdentifier: null, issueTitle: null, outcome: "skipped", reason: "not a notifiable event", targets: [] });
     seedEvent(store, { kind: "unclassified", issueIdentifier: null, issueTitle: null, outcome: "skipped", reason: "missing issue fields", targets: [] });
-    const hidden = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
+    const hidden = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
     assert.equal((hidden.match(/<tr data-event/g) ?? []).length, 1);
     assert.match(hidden, /Último evento/);
     assert.match(hidden, /href="\/admin\/status\?all=1">Mostrar todos los eventos/);
-    const shown = await (await fetch(`${base}/admin/status?all=1`, { headers: auth() })).text();
+    const shown = await (await fetch(`${base}/admin/status?all=1`, { headers: auth })).text();
     assert.equal((shown.match(/<tr data-event/g) ?? []).length, 3);
     assert.match(shown, /Últimos 3 eventos/);
     assert.match(shown, /href="\/admin\/status">Ocultar eventos sin clasificar/);
@@ -622,19 +871,19 @@ test("status hides unclassified events by default and the toggle shows or hides 
   }));
 
 test("status with only unclassified events explains they are hidden instead of claiming there are none", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     seedEvent(store, { kind: "unclassified", outcome: "skipped", reason: "not a notifiable event", targets: [] });
-    const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
     assert.match(text, /No hay eventos para mostrar/);
     assert.match(text, /Mostrar todos los eventos/);
     assert.equal((text.match(/<tr data-event/g) ?? []).length, 0);
   }));
 
 test("people page hides deactivated people and a successful Linear read deactivates the ones that are gone", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     store.upsertPerson({ linearUserId: "gone", name: "Fulano Baja", email: null, slackUserId: "UGONE", matchSource: "manual" });
     store.upsertPerson({ linearUserId: "old", name: "Mengano Inactivo", email: null, slackUserId: null, matchSource: "unmatched", active: false });
-    const text = await (await fetch(`${base}/admin/people`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/people`, { headers: auth })).text();
     assert.doesNotMatch(text, /Fulano Baja|Mengano Inactivo|UGONE/);
     assert.match(text, /Luis/);
     assert.deepEqual([store.getPerson("gone")?.slackUserId, store.getPerson("gone")?.matchSource, store.getPerson("gone")?.active], ["UGONE", "manual", false]);
@@ -652,9 +901,9 @@ test("a whitespace-only Slack id is a clear request and a lowercase id is reject
   }, { lookup: async () => "UANA2" }));
 
 test("people page reactivates stored people who are active again in Linear", () =>
-  withApp(async ({ base, store }) => {
+  withApp(async ({ auth, base, store }) => {
     store.upsertPerson({ linearUserId: "u1", name: "Luis", email: null, slackUserId: "UMAN", matchSource: "manual", active: false });
-    const text = await (await fetch(`${base}/admin/people`, { headers: auth() })).text();
+    const text = await (await fetch(`${base}/admin/people`, { headers: auth })).text();
     assert.match(rowOf(text, "Luis"), /Manual[\s\S]*UMAN/);
     assert.equal(store.getPerson("u1")?.active, true);
   }, { users: async () => LINEAR_USERS }));

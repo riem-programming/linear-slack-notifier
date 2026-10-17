@@ -45,7 +45,7 @@ const ENV_LABEL_MAX = 40;
 
 const envLabel = (env: Env): string | null => env.ADMIN_ENV_LABEL?.trim().slice(0, ENV_LABEL_MAX) || null;
 
-const SESSION_SECRET_MIN_BYTES = 32;
+export const SESSION_SECRET_MIN_BYTES = 32;
 
 // A missing or short secret does not stop boot: the admin stays disabled (fails closed) and webhooks keep working.
 const sessionSecret = (env: Env): string | null => {

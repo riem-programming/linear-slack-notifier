@@ -93,13 +93,13 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(auth)!: replace admin Basic Auth with login page and session cookie`
 - Linear ticket: "Admin: login con sesión y cierre de Basic Auth" - Página de login con cookie de sesión de 8 horas, logout con CSRF y límite de intentos; se elimina Basic Auth.
 - Files: `src/login.ts`, `src/admin.ts`, `src/auth.ts`, `src/http.ts`, `src/config.ts`, `src/app.ts`, `src/server.ts`, `docs/OPERATIONS.md`, `test/admin.test.ts` (helper `login(h)`), `test/auth.test.ts`, `test/config.test.ts`.
-- [ ] 2b.1 RED: config: `sessionSecret` null when unset or < 32 bytes.
-- [ ] 2b.2 RED: app tests: admin disabled 403 on every `/admin*` route incl. assets and login, webhooks and `/health` unaffected; unauthenticated GET 303 to `/admin/login?next=`; unauthenticated POST 401 no state change; Basic Auth header ignored.
-- [ ] 2b.3 RED: login: success sets cookie (attributes) and 303 `safeNext`; wrong password 401 with "Contraseña incorrecta..." and `limiter.fail`; 6th attempt 429 with `Retry-After`, password not evaluated; cross-origin 403; logout needs session + Origin + CSRF, clears cookie, 303 to `?status=logged-out`; valid session on login GET redirects.
-- [ ] 2b.4 GREEN: `http.redirect` extra headers; `auth.ts` (`checkPassword`, export `safeEqual`, remove Basic Auth and old CSRF); `config.ts` `sessionSecret`.
-- [ ] 2b.5 GREEN: `login.ts` page; gate order in `admin.ts` (A5, A7, A8); `app.ts`/`server.ts` pass secret, limiter, client IP; warning log without value.
-- [ ] 2b.6 GREEN: swap test helper `auth()` for `login(h)`; update all existing admin tests.
-- [ ] 2b.7 Docs: `docs/OPERATIONS.md` (`SESSION_SECRET`, `ADMIN_ENV_LABEL`, login flow, HTTPS needed).
+- [x] 2b.1 RED: config: `sessionSecret` null when unset or < 32 bytes.
+- [x] 2b.2 RED: app tests: admin disabled 403 on every `/admin*` route incl. assets and login, webhooks and `/health` unaffected; unauthenticated GET 303 to `/admin/login?next=`; unauthenticated POST 401 no state change; Basic Auth header ignored.
+- [x] 2b.3 RED: login: success sets cookie (attributes) and 303 `safeNext`; wrong password 401 with "Contraseña incorrecta..." and `limiter.fail`; 6th attempt 429 with `Retry-After`, password not evaluated; cross-origin 403; logout needs session + Origin + CSRF, clears cookie, 303 to `?status=logged-out`; valid session on login GET redirects.
+- [x] 2b.4 GREEN: `http.redirect` extra headers; `auth.ts` (`checkPassword`, export `safeEqual`, remove Basic Auth and old CSRF); `config.ts` `sessionSecret`.
+- [x] 2b.5 GREEN: `login.ts` page; gate order in `admin.ts` (A5, A7, A8); `app.ts`/`server.ts` pass secret, limiter, client IP; warning log without value.
+- [x] 2b.6 GREEN: swap test helper `auth()` for `login(h)`; update all existing admin tests.
+- [x] 2b.7 Docs: `docs/OPERATIONS.md` (`SESSION_SECRET`, `ADMIN_ENV_LABEL`, login flow, HTTPS needed).
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: `/admin` redirects to login; wrong password shows message; 6 wrong attempts show the 429 page; correct password lands on Estado; refresh keeps session; logout returns to login with "sesión cerrada" status; cookie is HttpOnly/Secure/SameSite=Strict/Path=/admin; webhook still delivers; Basic Auth no longer works.
 - USER prerequisites: BEFORE deploying, set `SESSION_SECRET` (>= 32 bytes) in Dokploy staging, and optionally `ADMIN_ENV_LABEL=Staging`. Without it the admin answers 403. Rollback: revert PR.
