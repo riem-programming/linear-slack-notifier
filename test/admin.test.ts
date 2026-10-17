@@ -6,6 +6,7 @@ import { createApp } from "../src/app.ts";
 import { openDb } from "../src/db.ts";
 import { csrfFor, signSession, verifySession } from "../src/session.ts";
 import { createStore } from "../src/store.ts";
+import type { SlackMember } from "../src/members.ts";
 import type { EventEntry, Store } from "../src/store.ts";
 
 const PASSWORD = "hunter2-pass";
@@ -23,6 +24,7 @@ type Options = {
   projects?: () => Promise<{ id: string; name: string }[]>;
   users?: () => Promise<{ id: string; name: string; email: string | null; active: boolean }[]>;
   lookup?: (email: string) => Promise<string | null>;
+  members?: () => Promise<SlackMember[]>;
   envLabel?: string | null;
   now?: () => number;
 };
@@ -48,6 +50,7 @@ const withApp = async (run: (h: Harness) => Promise<void>, options: Options = {}
     secret: "whsec", store: options.wrapStore?.(store) ?? store, slack: {
       postMessage: async () => {}, listChannels: options.channels ?? (async () => []),
       lookupUserByEmail: options.lookup ?? (async () => null),
+      ...(options.members ? { listMembers: options.members } : {}),
     },
     linear: { listProjects: options.projects ?? (async () => []), listUsers: options.users ?? (async () => []) },
     adminPassword: "adminPassword" in options ? options.adminPassword : PASSWORD,
@@ -800,9 +803,9 @@ const seedPeople = (store: Store): void => {
   store.upsertPerson({ linearUserId: "u2", name: "Ana", email: "ana@kamailab.com", slackUserId: "UANA", matchSource: "manual" });
   store.upsertPerson({ linearUserId: "u3", name: "Beto", email: null, slackUserId: null, matchSource: "unmatched" });
 };
-// Returns the <tr data-person> block that contains the given name.
+// Returns the person row block that contains the given name.
 const rowOf = (text: string, name: string): string =>
-  text.split("</tr>").find((row) => row.includes("<tr data-person") && row.includes(name)) ?? "";
+  text.split('<div class="person"').find((row) => row.includes(name)) ?? "";
 const LINEAR_USERS = [
   { id: "u1", name: "Luis", email: "Luis@kamailab.com", active: true },
   { id: "u9", name: "Baja", email: "baja@kamailab.com", active: false },
@@ -814,13 +817,13 @@ test("people page lists users with auto, manual and unlinked states and the form
   withApp(async ({ auth, base, store }) => {
     seedPeople(store);
     const text = await (await fetch(`${base}/admin/people`, { headers: auth })).text();
-    assert.match(rowOf(text, "Luis"), /Automático[\s\S]*ULUIS/);
-    assert.match(rowOf(text, "Ana"), /Manual[\s\S]*UANA/);
-    assert.match(rowOf(text, "Beto"), /Sin vincular/);
+    assert.match(rowOf(text, "Luis"), /Automático[\s\S]*Cambiar/);
+    assert.match(rowOf(text, "Ana"), /Manual[\s\S]*Cambiar[\s\S]*Quitar vínculo/);
+    assert.match(rowOf(text, "Beto"), /Sin vincular[\s\S]*Vincular/);
     assert.match(text, /action="\/admin\/people\/sync"/);
-    assert.equal((text.match(/action="\/admin\/people\/override"/g) ?? []).length, 4);
+    assert.equal((text.match(/action="\/admin\/people\/override"/g) ?? []).length, 1);
+    assert.match(text, /1 persona sin vincular[\s\S]*href="\/admin\/people\/u3\/link"[^>]*>Vincular ahora/);
     assert.match(text, /name="csrf" value="[0-9a-f]{64}"/);
-    assert.match(text, /pattern="\[UW\]\[A-Z0-9\]\+"/);
   }, { users: async () => SEEDED_USERS }));
 
 test("people page pulls active Linear users in as unlinked", () =>
@@ -1077,7 +1080,7 @@ test("people page reactivates stored people who are active again in Linear", () 
   withApp(async ({ auth, base, store }) => {
     store.upsertPerson({ linearUserId: "u1", name: "Luis", email: null, slackUserId: "UMAN", matchSource: "manual", active: false });
     const text = await (await fetch(`${base}/admin/people`, { headers: auth })).text();
-    assert.match(rowOf(text, "Luis"), /Manual[\s\S]*UMAN/);
+    assert.match(rowOf(text, "Luis"), /Manual/);
     assert.equal(store.getPerson("u1")?.active, true);
   }, { users: async () => LINEAR_USERS }));
 
@@ -1162,3 +1165,127 @@ test("a store failure while saving rolls back and answers 500 without leaking de
     assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p1"]);
   }, { logs, wrapStore: (s) => ({ ...s, setChannelProjects: () => { throw new Error("disk exploded"); } }) });
 });
+
+const MEMBERS: SlackMember[] = [
+  { id: "UANA1", realName: "Ana Pérez", displayName: "ana", handle: "ana", email: "ana@kamailab.com" },
+  { id: "UBETO1", realName: "Beto Ruiz", displayName: "", handle: "beto", email: null },
+];
+const linkPost = (h: Harness, userId: string, fields: Record<string, string>, token?: string): Promise<Response> =>
+  fetch(`${h.base}/admin/people/${userId}/link`, {
+    method: "POST", redirect: "manual",
+    headers: { ...h.auth, origin: `http://${h.host}`, "content-type": "application/x-www-form-urlencoded" },
+    body: form({ csrf: token ?? h.csrf, ...fields }),
+  });
+
+test("link sheet GET: full page, fragment and server-side filtering", () =>
+  withApp(async (h) => {
+    seedPeople(h.store);
+    const full = await fetch(`${h.base}/admin/people/u3/link`, { headers: h.auth });
+    assert.equal(full.status, 200);
+    assert.equal(full.headers.get("cache-control"), "no-store");
+    assert.equal(full.headers.get("vary"), "X-Admin-Fragment");
+    const fullText = await full.text();
+    assert.match(fullText, /class="sidebar"/);
+    assert.match(fullText, /Vincular a Beto/);
+    assert.equal((fullText.match(/type="radio"/g) ?? []).length, 2);
+    assertNoInlineCode(fullText);
+    const fragment = await fetch(`${h.base}/admin/people/u3/link?q=PEREZ`, { headers: { ...h.auth, "x-admin-fragment": "1" } });
+    assert.equal(fragment.headers.get("cache-control"), "no-store");
+    assert.equal(fragment.headers.get("vary"), "X-Admin-Fragment");
+    const text = await fragment.text();
+    assert.doesNotMatch(text, /class="sidebar"/);
+    assert.equal((text.match(/type="radio"/g) ?? []).length, 1);
+    assert.match(text, /value="UANA1"/);
+  }, { users: async () => SEEDED_USERS, members: async () => MEMBERS }));
+
+test("link sheet GET: unknown or inactive person is 404 and anonymous is sent to login", () =>
+  withApp(async (h) => {
+    seedPeople(h.store);
+    h.store.upsertPerson({ linearUserId: "old", name: "Vieja", email: null, slackUserId: null, matchSource: "unmatched", active: false });
+    assert.equal((await fetch(`${h.base}/admin/people/ghost/link`, { headers: h.auth })).status, 404);
+    assert.equal((await fetch(`${h.base}/admin/people/old/link`, { headers: h.auth })).status, 404);
+    assert.equal((await fetch(`${h.base}/admin/people/%E0%A4%A/link`, { headers: h.auth })).status, 404);
+    const anon = await fetch(`${h.base}/admin/people/u3/link`, { redirect: "manual" });
+    assert.equal(anon.status, 303);
+    assert.match(anon.headers.get("location") ?? "", /^\/admin\/login/);
+  }, { users: async () => SEEDED_USERS, members: async () => MEMBERS }));
+
+test("link sheet GET: a Slack failure or a missing port shows the message and the paste field only", async () => {
+  const logs: string[] = [];
+  for (const options of [{ members: async (): Promise<SlackMember[]> => { throw new Error("missing_scope"); }, logs }, { logs }]) {
+    await withApp(async (h) => {
+      seedPeople(h.store);
+      const text = await (await fetch(`${h.base}/admin/people/u3/link`, { headers: h.auth })).text();
+      assert.match(text, /No se pudo cargar la lista de Slack\. Pega el ID de miembro\./);
+      assert.doesNotMatch(text, /type="radio"/);
+      assert.match(text, /name="slack"/);
+    }, { users: async () => SEEDED_USERS, ...options });
+  }
+  assert.match(logs.join("\n"), /Slack member list failed: missing_scope/);
+});
+
+test("link POST: a picked member must be in the cached list and sets a manual link", () =>
+  withApp(async (h) => {
+    seedPeople(h.store);
+    const res = await linkPost(h, "u3", { member: "UBETO1", slack: "" });
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get("location"), "/admin/people?status=override-set");
+    assert.deepEqual([h.store.getPerson("u3")?.slackUserId, h.store.getPerson("u3")?.matchSource], ["UBETO1", "manual"]);
+    const ghost = await linkPost(h, "u1", { member: "UNOTINLIST" });
+    assert.equal(ghost.status, 400);
+    assert.equal(h.store.getPerson("u1")?.slackUserId, "ULUIS");
+    assert.equal((await linkPost(h, "u1", {})).headers.get("location"), "/admin/people?status=member-missing");
+    const text = await (await fetch(`${h.base}/admin/people?status=override-set`, { headers: h.auth })).text();
+    assert.match(text, /Vínculo manual guardado/);
+  }, { users: async () => SEEDED_USERS, members: async () => MEMBERS }));
+
+test("link POST: a pasted id wins over the picked member and must match the format", () =>
+  withApp(async (h) => {
+    seedPeople(h.store);
+    const bad = await linkPost(h, "u3", { member: "UBETO1", slack: "beto" });
+    assert.equal(bad.headers.get("location"), "/admin/people?status=invalid-slack-id");
+    assert.equal(h.store.getPerson("u3")?.matchSource, "unmatched");
+    assert.equal((await linkPost(h, "u3", { slack: "ubeto1" })).headers.get("location"), "/admin/people?status=invalid-slack-id");
+    const ok = await linkPost(h, "u3", { member: "UBETO1", slack: " WPASTED9 " });
+    assert.equal(ok.headers.get("location"), "/admin/people?status=override-set");
+    assert.equal(h.store.getPerson("u3")?.slackUserId, "WPASTED9");
+  }, { users: async () => SEEDED_USERS, members: async () => MEMBERS }));
+
+test("link POST: pasting works with Slack down, a pick does not, an unknown person redirects", () =>
+  withApp(async (h) => {
+    seedPeople(h.store);
+    assert.equal((await linkPost(h, "u3", { slack: "UPASTE1" })).headers.get("location"), "/admin/people?status=override-set");
+    assert.equal(h.store.getPerson("u3")?.slackUserId, "UPASTE1");
+    const pick = await linkPost(h, "u1", { member: "UANA1" });
+    assert.equal(pick.headers.get("location"), "/admin/people?status=members-error");
+    assert.equal(h.store.getPerson("u1")?.slackUserId, "ULUIS");
+  }, { users: async () => SEEDED_USERS, members: async () => { throw new Error("ratelimited"); } }));
+
+test("link POST: an unknown or inactive person is 404, changes nothing and never calls Slack", async () => {
+  let calls = 0;
+  await withApp(async (h) => {
+    seedPeople(h.store);
+    h.store.upsertPerson({ linearUserId: "old", name: "Vieja", email: null, slackUserId: null, matchSource: "unmatched", active: false });
+    for (const id of ["ghost", "old"]) {
+      assert.equal((await linkPost(h, id, { member: "UANA1" })).status, 404);
+      assert.equal((await linkPost(h, id, { slack: "UPASTE1" })).status, 404);
+    }
+    assert.equal(h.store.getPerson("old")?.slackUserId, null);
+    assert.equal(calls, 0);
+  }, { users: async () => SEEDED_USERS, members: async () => { calls += 1; return MEMBERS; } });
+});
+
+test("link POST enforces session, Origin and csrf and changes nothing when rejected", () =>
+  withApp(async (h) => {
+    seedPeople(h.store);
+    const body = form({ csrf: h.csrf, slack: "UBETO1" });
+    const post = (headers: Record<string, string>, payload: string) =>
+      fetch(`${h.base}/admin/people/u3/link`, { method: "POST", redirect: "manual", headers: { ...h.auth, "content-type": "application/x-www-form-urlencoded", ...headers }, body: payload });
+    assert.equal((await post({ origin: "https://evil.example" }, body)).status, 403);
+    assert.equal((await post({}, body)).status, 403);
+    assert.equal((await post({ origin: `http://${h.host}` }, form({ slack: "UBETO1" }))).status, 403);
+    assert.equal((await linkPost(h, "u3", { slack: "UBETO1" }, "forged")).status, 403);
+    const anon = await fetch(`${h.base}/admin/people/u3/link`, { method: "POST", headers: { origin: `http://${h.host}`, "content-type": "application/x-www-form-urlencoded" }, body });
+    assert.equal(anon.status, 401);
+    assert.equal(h.store.getPerson("u3")?.matchSource, "unmatched");
+  }, { users: async () => SEEDED_USERS, members: async () => MEMBERS }));

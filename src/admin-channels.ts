@@ -18,7 +18,7 @@ export const filterChannels = (channels: Channel[], q: string): Channel[] => {
 
 const projectsHref = (channelId: string): string => `${CHANNELS_HREF}/${encodeURIComponent(channelId)}/projects`;
 
-const searchForm = (action: string, id: string, label: string, q: string, extra: string): Html =>
+export const searchForm = (action: string, id: string, label: string, q: string, extra: string): Html =>
   html`<form method="get" action="${action}" role="search" class="search"${extra ? html` ${extra}` : ""}><label for="${id}">${label}</label><input type="search" id="${id}" name="q" value="${q}" maxlength="${MAX_QUERY}"><button type="submit" class="btn btn-secondary">Buscar</button></form>`;
 
 export type ChannelsView = {

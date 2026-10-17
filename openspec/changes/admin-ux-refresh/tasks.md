@@ -186,10 +186,10 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(admin): redesign Personas screen with Slack member picker sheet`
 - Linear ticket: "Admin: nueva pantalla Personas" - Filas con avatar, aviso de personas sin vincular y hoja para buscar y vincular miembros de Slack, con opción de pegar el ID.
 - Files: `src/admin-people.ts`, `src/admin.ts`, `src/public/admin.js`, `src/public/admin.css`, `test/admin-people.test.ts`, `test/admin.test.ts`.
-- [ ] 5b.1 RED: banner "N personas sin vincular: sus menciones salen como texto." (singular for 1, none for 0); pills auto/manual/unmatched; "Vincular"/"Cambiar"; "Quitar vínculo manual"; Linear failure lists stored mappings.
-- [ ] 5b.2 RED: `GET /admin/people/:id/slack?q=`: up to 50 radios, 404 unknown user, fragment vs full page, `listMembers` failure shows paste field and message.
-- [ ] 5b.3 RED: override POST: pasted `slack` wins over `member`; must match `^[UW][A-Z0-9]+$` else rejected; `member` not in cached list gives 400; CSRF enforced.
-- [ ] 5b.4 GREEN: renderer, handler, `form[data-live]` debounced re-fetch in `admin.js`, CSS.
+- [x] 5b.1 RED: banner "N personas sin vincular: sus menciones salen como texto." (singular for 1, none for 0); pills auto/manual/unmatched; "Vincular"/"Cambiar"; "Quitar vínculo manual"; Linear failure lists stored mappings.
+- [x] 5b.2 RED (route is `/admin/people/:id/link`, see apply-progress): `GET /admin/people/:id/link?q=`: up to 50 radios, 404 unknown user, fragment vs full page, `listMembers` failure shows paste field and message.
+- [x] 5b.3 RED (POST `/admin/people/:id/link`): link POST: pasted `slack` wins over `member`; must match `^[UW][A-Z0-9]+$` else rejected; `member` not in cached list gives 400; CSRF enforced.
+- [x] 5b.4 GREEN: renderer, handler, `form[data-live]` debounced re-fetch in `admin.js`, CSS.
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: banner count; open "Vincular", type to filter (live with JS, via submit without JS); pick a member and save; paste an invalid ID is rejected; "Quitar vínculo manual" clears; copy uses "tú".
 - USER prerequisites: manual staging check with JS ON and OFF. After this slice, the full success-criteria pass on staging, then update docs and proceed to verify.

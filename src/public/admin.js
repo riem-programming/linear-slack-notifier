@@ -11,6 +11,7 @@
   const load = async (url) => {
     if (busy) return;
     busy = true;
+    clearTimeout(timer);
     try {
       await fetchSheet(url);
     } finally {
@@ -48,14 +49,44 @@
     const needle = fold(input.value);
     for (const row of dialog.querySelectorAll("[data-fold]")) row.hidden = needle !== "" && !row.dataset.fold.includes(needle);
   };
+  // Pickers (form[data-live]) ask the server for fresh results while the user types; only the results block is swapped,
+  // so the search field keeps focus and a picked radio stays picked when it is still listed.
+  let timer = 0;
+  let latest = 0;
+  const refresh = async (form) => {
+    const mine = ++latest;
+    const url = new URL(form.action);
+    url.searchParams.set("q", form.elements.q.value);
+    try {
+      const res = await fetch(url, { headers: { "X-Admin-Fragment": "1" }, credentials: "same-origin" });
+      if (!res.ok || res.redirected || mine !== latest) return;
+      const next = new DOMParser().parseFromString(await res.text(), "text/html").querySelector("[data-live-results]");
+      const current = dialog.querySelector("[data-live-results]");
+      if (!next || !current) return;
+      const picked = current.querySelector("input[name=member]:checked")?.value;
+      current.replaceWith(next);
+      const paste = dialog.querySelector("details.paste");
+      if (paste && !next.querySelector("input[name=member]")) paste.open = true;
+      for (const radio of next.querySelectorAll("input[name=member]")) radio.checked = radio.value === picked;
+    } catch {
+      // Keep the current results; the form still submits normally.
+    }
+  };
   dialog.addEventListener("input", (event) => {
-    if (event.target instanceof HTMLInputElement && event.target.type === "search") filter(event.target);
+    if (!(event.target instanceof HTMLInputElement) || event.target.type !== "search") return;
+    if (event.target.form?.matches("[data-live]")) {
+      clearTimeout(timer);
+      const form = event.target.form;
+      timer = setTimeout(() => refresh(form), 250);
+    } else filter(event.target);
   });
   dialog.addEventListener("submit", (event) => {
-    if (event.target instanceof HTMLFormElement && event.target.matches("[data-sheet-search]")) event.preventDefault();
+    if (event.target instanceof HTMLFormElement && event.target.matches("[data-sheet-search], [data-live]")) event.preventDefault();
   });
 
   dialog.addEventListener("close", () => {
+    clearTimeout(timer);
+    latest += 1;
     dialog.replaceChildren();
     if (opener instanceof HTMLElement) opener.focus();
   });

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { channelsPage, filterChannels, MAX_QUERY, sheetFragment, sheetPage } from "./admin-channels.ts";
+import { peoplePage, personSheetFragment, personSheetPage } from "./admin-people.ts";
 import { statusPage } from "./admin-status.ts";
 import { serveAsset } from "./assets.ts";
 import { SESSION_SECRET_MIN_BYTES } from "./config.ts";
@@ -15,15 +16,15 @@ import { clearOverride, deactivateMissing, reactivateReturning, setOverride, syn
 import { clientIp, createRateLimiter } from "./ratelimit.ts";
 import type { RateLimiter } from "./ratelimit.ts";
 import { SESSION_COOKIE, clearSessionCookie, csrfFor, readCookie, safeNext, sessionCookie, signSession, verifySession } from "./session.ts";
+import type { SlackMember } from "./members.ts";
 import type { SlackApi } from "./slack.ts";
-import type { MatchSource, Person, Store } from "./store.ts";
-import { button, emptyState, flash, pill } from "./ui.ts";
-import type { Tone } from "./ui.ts";
+import type { Store } from "./store.ts";
+import { flash } from "./ui.ts";
 
 type AdminOptions = {
   store: Store;
   // Optional ports: when missing, the matching upstream is reported as unavailable.
-  slack?: Partial<Pick<SlackApi, "listChannels" | "lookupUserByEmail">> | undefined;
+  slack?: Partial<Pick<SlackApi, "listChannels" | "lookupUserByEmail" | "listMembers">> | undefined;
   linear?: Partial<Pick<LinearApi, "listProjects" | "listUsers">> | undefined;
   // An unset or empty password, or a missing session secret, disables the admin entirely.
   password: string | undefined;
@@ -61,6 +62,7 @@ const MAX_FORM_BYTES = 100_000;
 const MAX_CHANNEL_PROJECTS = 200;
 const CHANNEL_PROJECTS_ROUTE = /^\/admin\/channels\/([^/]+)\/projects$/;
 const CHANNEL_PROJECT_REMOVE_ROUTE = /^\/admin\/channels\/([^/]+)\/projects\/([^/]+)\/remove$/;
+const PERSON_LINK_ROUTE = /^\/admin\/people\/([^/]+)\/link$/;
 const CHANNEL_ID = /^[A-Z0-9]{1,32}$/;
 type Page = (options: { title: string; current: NavKey; body: Html }) => Html;
 // Per-request view of the authenticated session: the render function embeds its logout CSRF token.
@@ -79,43 +81,13 @@ const FLASH: Record<string, { ok: boolean; text: string }> = {
   "override-cleared": { ok: true, text: "Vínculo manual quitado; se volvió a emparejar por correo." },
   "invalid-slack-id": { ok: false, text: "Ingresa un ID de miembro de Slack válido (por ejemplo U01ABC23DEF)." },
   "person-not-found": { ok: false, text: "No se encontró a la persona indicada." },
+  "member-missing": { ok: false, text: "Elige un miembro de Slack o pega su ID." },
+  "members-error": { ok: false, text: "No se pudo cargar la lista de Slack. Pega el ID de miembro." },
 };
 
 const flashNotice = (status: string | null): Html | "" => {
   const entry = status && Object.hasOwn(FLASH, status) ? FLASH[status] : undefined;
   return entry ? flash(entry.ok, entry.text) : "";
-};
-
-const SOURCES: Record<MatchSource, string> = { auto: "Automático", manual: "Manual", unmatched: "Sin vincular" };
-const SOURCE_TONES: Record<MatchSource, Tone> = { auto: "success", manual: "manual", unmatched: "neutral" };
-
-const personForm = (csrf: string, person: Person, inner: Html): Html =>
-  html`<form method="post" action="/admin/people/override"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="user" value="${person.linearUserId}">${inner}</form>`;
-
-const personRow = (person: Person, csrf: string): Html => {
-  const setForm = personForm(csrf, person, html`<label>ID de Slack <input name="slack" pattern="[UW][A-Z0-9]+" placeholder="U01ABC23DEF" required></label> ${button({ label: "Guardar vínculo", variant: "primary" })}`);
-  const clearForm = person.matchSource === "manual"
-    ? personForm(csrf, person, html`<input type="hidden" name="slack" value="">${button({ label: "Quitar vínculo manual", variant: "danger" })}`)
-    : "";
-  return html`<tr data-person>
-<td>${person.name}</td>
-<td>${person.email ?? html`<span class="muted">—</span>`}</td>
-<td>${pill(Object.hasOwn(SOURCE_TONES, person.matchSource) ? SOURCE_TONES[person.matchSource] : "neutral", SOURCES[person.matchSource])}</td>
-<td>${person.slackUserId ? html`<code>${person.slackUserId}</code>` : html`<span class="muted">—</span>`}</td>
-<td>${setForm}${clearForm}</td>
-</tr>`;
-};
-
-const peoplePage = (people: Person[], linearDown: boolean, status: string | null, csrf: string, render: Page): Html => {
-  const warning = linearDown ? flash(false, "No se pudo consultar Linear. Se muestran las personas guardadas.") : "";
-  const sync = html`<form method="post" action="/admin/people/sync"><input type="hidden" name="csrf" value="${csrf}">${button({ label: "Volver a emparejar por correo" })}</form>`;
-  const table = people.length
-    ? html`<div class="card"><table>
-<thead><tr><th scope="col">Persona</th><th scope="col">Correo</th><th scope="col">Estado</th><th scope="col">Slack</th><th scope="col">Vínculo</th></tr></thead>
-<tbody>${people.map((person) => personRow(person, csrf))}</tbody>
-</table></div>`
-    : emptyState("Aún no hay personas.", "Usa «Volver a emparejar por correo» para cargarlas.");
-  return render({ title: "Personas", current: "people", body: html`${flashNotice(status)}${warning}<div class="toolbar">${sync}</div>${table}` });
 };
 
 const errorPage = (): Html =>
@@ -164,9 +136,31 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
       othersOf: (projectId: string) => store.channelsFor(projectId).filter((c) => c.id !== channel.id).map((c) => c.name),
       csrf, q: (search.get("q") ?? "").trim().slice(0, MAX_QUERY),
     };
-    const content = req.headers["x-admin-fragment"] === "1" ? sheetFragment(view) : sheetPage(view, render);
-    // The same URL answers a fragment or a full page, so caches must key on the header.
+    sheetResponse(req, res, sheetFragment(view), () => sheetPage(view, render));
+  };
+
+  // The same URL answers a fragment or a full page, so caches must key on the header.
+  const sheetResponse = (req: IncomingMessage, res: ServerResponse, fragment: Html, fullPage: () => Html): void => {
+    const content = req.headers["x-admin-fragment"] === "1" ? fragment : fullPage();
     sendHtml(res, 200, content.value, { ...SECURITY_HEADERS, vary: "X-Admin-Fragment" });
+  };
+
+  // The member list is cached by the Slack client; null means it could not be loaded.
+  const loadMembers = async (): Promise<SlackMember[] | null> => {
+    try {
+      if (!slack?.listMembers) throw new Error("Slack unavailable");
+      return await slack.listMembers();
+    } catch (error) {
+      logUpstream("Slack member list", error);
+      return null;
+    }
+  };
+
+  const personSheet = async (req: IncomingMessage, res: ServerResponse, rawId: string, search: URLSearchParams, { csrf, render }: Ctx): Promise<void> => {
+    const person = store.getPerson(safeDecode(rawId));
+    if (!person || person.active === false) return send(res, 404, { error: "not found" }, SECURITY_HEADERS);
+    const view = { person, members: await loadMembers(), csrf, q: (search.get("q") ?? "").trim().slice(0, MAX_QUERY) };
+    sheetResponse(req, res, personSheetFragment(view), () => personSheetPage(view, render));
   };
 
   const people = async (res: ServerResponse, status: string | null, { csrf, render }: Ctx): Promise<void> => {
@@ -186,7 +180,7 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
       logUpstream("Linear user list", error);
       linearDown = true;
     }
-    page(res, 200, peoplePage(store.listPeople().filter((person) => person.active !== false), linearDown, status, csrf, render));
+    page(res, 200, peoplePage({ people: store.listPeople().filter((person) => person.active !== false), linearDown, notice: flashNotice(status), csrf }, render));
   };
 
   const get = async (req: IncomingMessage, res: ServerResponse, path: string, search: URLSearchParams, ctx: Ctx): Promise<void> => {
@@ -197,6 +191,8 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     const sheetRoute = CHANNEL_PROJECTS_ROUTE.exec(route);
     if (sheetRoute) return channelSheet(req, res, sheetRoute[1] ?? "", search, ctx);
     if (route === "/admin/people") return people(res, search.get("status"), ctx);
+    const personRoute = PERSON_LINK_ROUTE.exec(route);
+    if (personRoute) return personSheet(req, res, personRoute[1] ?? "", search, ctx);
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
 
@@ -240,6 +236,24 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
       return back({ auto: "override-cleared", unmatched: "override-cleared", "not-found": "person-not-found", "not-manual": "invalid-slack-id" }[result]);
     }
     return back({ set: "override-set", invalid: "invalid-slack-id", "not-found": "person-not-found" }[setOverride(store, user, slackId)]);
+  };
+
+  // A pasted id wins over the picked member; a picked member must exist in the cached Slack list.
+  const personLink = async (res: ServerResponse, rawId: string, form: Record<string, string>): Promise<void> => {
+    const back = (status: string): void => done(res, status, "people");
+    const userId = safeDecode(rawId);
+    // Existence is checked before any Slack call.
+    const person = store.getPerson(userId);
+    if (!person || person.active === false) return send(res, 404, { error: "not found" }, SECURITY_HEADERS);
+    let slackId = (form.slack ?? "").trim();
+    if (slackId === "") {
+      slackId = form.member ?? "";
+      if (slackId === "") return back("member-missing");
+      const members = await loadMembers();
+      if (!members) return back("members-error");
+      if (!members.some((member) => member.id === slackId)) return send(res, 400, { error: "invalid request" }, SECURITY_HEADERS);
+    }
+    back({ set: "override-set", invalid: "invalid-slack-id", "not-found": "person-not-found" }[setOverride(store, userId, slackId)]);
   };
 
   const channelsRefresh = async (res: ServerResponse, q: string): Promise<void> => {
@@ -302,6 +316,8 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     if (removal) return channelProjectRemove(res, removal[1] ?? "", removal[2] ?? "", form.q ?? "");
     const sheet = CHANNEL_PROJECTS_ROUTE.exec(route);
     if (sheet) return channelProjectsPost(res, sheet[1] ?? "", params);
+    const link = PERSON_LINK_ROUTE.exec(route);
+    if (link) return personLink(res, link[1] ?? "", form);
     if (route === "/admin/people/sync" || route === "/admin/people/override") return peoplePost(res, route, form);
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
