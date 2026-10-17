@@ -161,3 +161,33 @@ Slice 2b: 6/6 tasks complete (24/24 across 1a, 1b, 2a, 2b). Slices 3a-6 remain. 
 - A missing or repeated `Linear-Delivery` header logs a warning (`AppOptions.logger` now includes `warn`).
 - Confirmed the unclassified reason string `not a notifiable event` matches the issue-notifications spec.
 - Suite 116/116, typecheck clean.
+
+## Batch 5 - Slice 3a (Admin foundation: auth, html, Status screen)
+
+Mode: Strict TDD. Branch: `feat/kamaiti-78-admin-auth-status` (base `origin/develop`, 1a-2b merged). Linear: KAMAITI-78.
+
+### Completed
+- [x] 3a.1 RED/GREEN `test/html.test.ts` + `src/html.ts` (`html` tag escapes by default, `raw()`, nested/array handling, `layout()` with nav)
+- [x] 3a.2 RED/GREEN `test/auth.test.ts` + `src/auth.ts` (`checkBasicAuth`, `csrfToken`, `verifyCsrf`, `checkOrigin`)
+- [x] 3a.3 RED `test/admin.test.ts` (401/403, public routes, security headers, Status, escaping, generic error, POST guards)
+- [x] 3a.4 GREEN `src/admin.ts` + routing in `src/app.ts` + wiring in `src/server.ts`
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3a.1 | `test/html.test.ts` | Unit | 116/116 baseline | Failed (module missing) | Passed | hostile text, null/number, raw, nested, arrays, layout | Clean |
+| 3a.2 | `test/auth.test.ts` | Unit | 116/116 | Failed (module missing) | 128/128 | none/malformed/wrong/unset/empty/long password, origin vs referer precedence, lookalike hosts | Clean |
+| 3a.3-3a.4 | `test/admin.test.ts` | Integration (ephemeral server) | 128/128 | 10 failing | 140/140 | 6 paths without creds, unset and empty password, 55 rows capped at 50, hostile fields, store failure | CSP aligned with design (`default-src 'self'`) |
+
+### Deviations from design/tasks
+- Unset/empty `ADMIN_PASSWORD` answers 403 (no `WWW-Authenticate`) rather than 401, so browsers do not prompt for a password that cannot work. `loadConfig` already requires the password, so this only matters for direct `createApp` use.
+- Basic Auth ignores the user name (single shared password).
+- `csrfToken(secret)` / `verifyCsrf` are ready, and POST handling already enforces Origin + token (403) but there are no state-changing routes yet; any authenticated, valid POST gets 404 until 3b/3c add handlers. The csrf secret is a per-process random value (`createAdmin` option `csrfSecret` for tests). Forms are not rendered yet, so no template emits the hidden token in 3a.
+- Channels and People pages are placeholders (nav links work).
+- Admin 500 pages are generic and the log line only carries the error class name (upstream messages may echo request details).
+- Status shows a Spanish label for known reason codes and falls back to the raw code; per-channel targets show the Slack error code stored by 2b.
+- `AppOptions` gained `adminPassword` and `timeZone` (default `America/Lima`); `server.ts` passes `config.adminPassword` / `config.statusTimeZone`.
+- Size: 556 additions + 1 deletion excl. openspec (tests ~290, code ~265), above ~400 budget; boundary is the two feature commits (helpers vs admin screen).
+
+### Status
+Slice 3a: 4/4 tasks complete (28/28 across 1a-3a). Slices 3b-6 remain. Suite 140/140, typecheck clean.
