@@ -168,3 +168,20 @@ test("migrate refuses a database newer than this build supports", () => {
   assert.equal(pragma(db, "user_version"), migrations.length + 2);
   db.close();
 });
+
+test("a failed backup keeps the previous same-day snapshot and leaves no temp file", () => {
+  withTempDir((dir) => {
+    const db = openDb(join(dir, "notifier.db"));
+    db.prepare("INSERT INTO projects (id, name, updated_at) VALUES ('p1', 'Web', 'now')").run();
+    const backupDir = join(dir, "backups");
+    const at = Date.UTC(2026, 2, 5, 3);
+    const target = backup(db, backupDir, { keep: 7, now: at });
+    db.close();
+    // VACUUM INTO cannot run on a closed database, so the second attempt fails.
+    assert.throws(() => backup(db, backupDir, { keep: 7, now: at + 1000 }));
+    assert.deepEqual(readdirSync(backupDir), ["notifier-20260305.db"]);
+    const snapshot = openDb(target);
+    assert.deepEqual(snapshot.prepare("SELECT name FROM projects").all().map((r) => ({ ...r })), [{ name: "Web" }]);
+    snapshot.close();
+  });
+});

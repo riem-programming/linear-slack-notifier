@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 const BUSY_TIMEOUT_MS = 5000;
@@ -91,10 +91,19 @@ type BackupOptions = { keep: number; now?: number };
 export const backup = (db: DatabaseSync, dir: string, options: BackupOptions): string => {
   const { keep, now = Date.now() } = options;
   mkdirSync(dir, { recursive: true });
+  // Backup file dates use UTC.
   const stamp = new Date(now).toISOString().slice(0, 10).replaceAll("-", "");
   const target = join(dir, `notifier-${stamp}.db`);
-  rmSync(target, { force: true });
-  db.prepare("VACUUM INTO ?").run(target);
+  // Snapshot to a temp file first so a failure never destroys an existing same-day backup.
+  const temp = `${target}.tmp`;
+  rmSync(temp, { force: true });
+  try {
+    db.prepare("VACUUM INTO ?").run(temp);
+    renameSync(temp, target);
+  } catch (error) {
+    rmSync(temp, { force: true });
+    throw error;
+  }
   const stale = readdirSync(dir).filter((file) => BACKUP_FILE.test(file)).sort().reverse().slice(keep);
   for (const file of stale) rmSync(join(dir, file), { force: true });
   return target;
