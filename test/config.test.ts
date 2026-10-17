@@ -24,6 +24,7 @@ test("loads required secrets and applies defaults", () => {
     eventLogRetentionDays: 30,
     statusTimeZone: "America/Lima",
     adminEnvLabel: null,
+    sessionSecret: null,
   });
 });
 
@@ -77,4 +78,12 @@ test("adminEnvLabel is trimmed, cut to 40 characters and null when unset or blan
   assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "   " }).adminEnvLabel, null);
   assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "" }).adminEnvLabel, null);
   assert.equal(loadConfig(base).adminEnvLabel, null);
+});
+
+test("sessionSecret is null when unset or shorter than 32 bytes", () => {
+  assert.equal(loadConfig(base).sessionSecret, null);
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "x".repeat(31) }).sessionSecret, null);
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "x".repeat(32) }).sessionSecret, "x".repeat(32));
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "é".repeat(16) }).sessionSecret, "é".repeat(16));
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "é".repeat(15) }).sessionSecret, null);
 });
