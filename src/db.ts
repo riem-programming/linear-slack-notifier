@@ -38,7 +38,11 @@ const userVersion = (db: DatabaseSync): number => {
 
 // Applies pending migrations, each in its own transaction. Returns the resulting schema version.
 export const migrate = (db: DatabaseSync, list: readonly string[] = migrations): number => {
-  for (let version = userVersion(db); version < list.length; version += 1) {
+  const current = userVersion(db);
+  if (current > list.length) {
+    throw new Error(`Database schema version ${current} is newer than this build supports (${list.length})`);
+  }
+  for (let version = current; version < list.length; version += 1) {
     db.exec("BEGIN");
     try {
       db.exec(list[version] as string);

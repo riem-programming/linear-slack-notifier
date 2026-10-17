@@ -156,3 +156,15 @@ test("backup can be run twice on the same day", () => {
     db.close();
   });
 });
+
+test("migrate refuses a database newer than this build supports", () => {
+  const db = openDb(":memory:");
+  db.exec(`PRAGMA user_version = ${migrations.length + 2}`);
+  const newer = migrations.length + 2;
+  assert.throws(
+    () => migrate(db),
+    { message: `Database schema version ${newer} is newer than this build supports (${migrations.length})` },
+  );
+  assert.equal(pragma(db, "user_version"), migrations.length + 2);
+  db.close();
+});
