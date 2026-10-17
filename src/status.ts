@@ -1,6 +1,15 @@
 import type { ProjectSnapshot, SnapshotIssue } from "./linear.ts";
 import { escapeText } from "./notify.ts";
 
+const TITLE_CAP = 120;
+const ZWSP = "​";
+// Slack escaping plus a zero-width space after mrkdwn markers (* _ ~ `), so user text cannot format the message.
+const esc = (value: string): string => escapeText(value).replace(/[*_~`]/g, (marker) => marker + ZWSP);
+const shorten = (value: string): string => {
+  const chars = [...value];
+  return chars.length > TITLE_CAP ? `${chars.slice(0, TITLE_CAP - 1).join("")}…` : value;
+};
+
 const DAY_MS = 86_400_000;
 const LIST_CAP = 10;
 const DIVIDER = "\n\n──────────\n\n";
@@ -77,16 +86,16 @@ export const summarizeProject = (snapshot: ProjectSnapshot, now: number, timeZon
 const renderList = (heading: string, items: StatusItem[], when: (day: string) => string): string[] => {
   if (items.length === 0) return [];
   const lines = items.slice(0, LIST_CAP).map((item) => {
-    const who = item.assignee ? escapeText(item.assignee) : "Sin asignar";
-    return `• ${escapeText(item.identifier)} ${escapeText(item.title)} — ${who} (${when(item.dueDate)})`;
+    const who = item.assignee ? esc(item.assignee) : "Sin asignar";
+    return `• ${esc(item.identifier)} ${esc(shorten(item.title))} — ${who} (${when(item.dueDate)})`;
   });
   if (items.length > LIST_CAP) lines.push(`+${items.length - LIST_CAP} más`);
   return [`${heading} (${items.length})`, ...lines];
 };
 
 export const renderStatus = (summary: ProjectSummary): string => {
-  const lines = [`📊 Estado de *${escapeText(summary.name)}* — ${shortDate(summary.today)}`, ""];
-  lines.push(summary.states.length ? `Por estado: ${summary.states.map((s) => `${escapeText(s.name)} ${s.count}`).join(" · ")}` : "Sin tareas.");
+  const lines = [`📊 Estado de *${esc(summary.name)}* — ${shortDate(summary.today)}`, ""];
+  lines.push(summary.states.length ? `Por estado: ${summary.states.map((s) => `${esc(s.name)} ${s.count}`).join(" · ")}` : "Sin tareas.");
   lines.push(`Completadas (últimos 7 días): ${summary.completedLast7Days}`);
   const sections = [
     ...renderList("⚠️ Vencidas", summary.overdue, (day) => `venció ${shortDate(day)}`),
@@ -95,7 +104,7 @@ export const renderStatus = (summary: ProjectSummary): string => {
   if (sections.length) lines.push("", ...sections);
   if (summary.milestone) {
     const { name, percent, done, total } = summary.milestone;
-    lines.push("", `🎯 Milestone activo: ${escapeText(name)} — ${percent}% (${done}/${total})`);
+    lines.push("", `🎯 Milestone activo: ${esc(name)} — ${percent}% (${done}/${total})`);
   }
   if (summary.truncated) lines.push("", "Se muestran solo las primeras 1.000 tareas del proyecto.");
   return lines.join("\n");

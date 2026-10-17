@@ -215,3 +215,24 @@ test("matchProject reports ambiguity and unknown names", () => {
   assert.deepEqual(matchProject("zzz", projects), { kind: "none" });
   assert.deepEqual(matchProject("   ", projects), { kind: "none" });
 });
+
+test("Slack formatting characters in user text are neutralized without breaking the layout", () => {
+  const formatted = issue("K-1", { title: "*bold* _it_ ~x~ `code`", assignee: "_Eve_", dueDate: "2026-10-01", state: { name: "*Doing*", type: "started", position: 1 } });
+  const text = renderStatus(
+    summarizeProject(snapshot([formatted], { name: "*Beta_2*", milestones: [{ id: "m", name: "_M_", sortOrder: 1 }] }), NOW, TZ),
+  );
+  const visible = text.replaceAll("​", "");
+  assert.match(visible, /Estado de \*\*Beta_2\*\* —/);
+  for (const raw of ["*bold*", "_it_", "~x~", "`code`", "*Doing*", "_Eve_"]) assert.ok(!text.includes(raw), raw);
+  assert.ok(text.includes("*​Beta_​2*​"));
+  assert.ok(text.startsWith("📊 Estado de *"));
+});
+
+test("long titles are cut at 120 characters with an ellipsis", () => {
+  const long = issue("K-1", { title: "x".repeat(300), dueDate: "2026-10-01" });
+  const line = renderStatus(summarizeProject(snapshot([long]), NOW, TZ)).split("\n").find((l) => l.startsWith("• K-1")) ?? "";
+  assert.ok(line.includes(`${"x".repeat(119)}…`));
+  assert.ok(!line.includes("x".repeat(120)));
+  const exact = issue("K-2", { title: "y".repeat(120), dueDate: "2026-10-01" });
+  assert.ok(renderStatus(summarizeProject(snapshot([exact]), NOW, TZ)).includes("y".repeat(120) + " —"));
+});
