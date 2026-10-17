@@ -102,8 +102,8 @@ test("an unauthenticated POST gets 401 and changes nothing", () =>
   withApp(async ({ base, host, store }) => {
     store.upsertChannel({ id: "C1", name: "test", isMember: true });
     store.upsertProject({ id: "p1", name: "Web" });
-    const res = await fetch(`${base}/admin/channels/link`, {
-      method: "POST", redirect: "manual", headers: { ...FORM, origin: `http://${host}` }, body: "channel=C1&project=p1",
+    const res = await fetch(`${base}/admin/channels/C1/projects`, {
+      method: "POST", redirect: "manual", headers: { ...FORM, origin: `http://${host}` }, body: "project=p1",
     });
     assert.equal(res.status, 401);
     assert.equal(res.headers.get("www-authenticate"), null);
@@ -524,7 +524,7 @@ test("pages never contain the admin password or the authorization header", () =>
 test("form POSTs are rejected without a matching Origin or a valid csrf token", () =>
   withApp(async ({ auth, base, host }) => {
     const post = (headers: Record<string, string>, body: string) =>
-      fetch(`${base}/admin/channels/link`, {
+      fetch(`${base}/admin/channels/C1/projects`, {
         method: "POST", headers: { ...auth, "content-type": "application/x-www-form-urlencoded", ...headers }, body,
       });
     assert.equal((await post({}, "csrf=x")).status, 403);
@@ -563,27 +563,143 @@ test("channels page shows an empty state with the refresh form and a csrf token"
     assert.match(text, /name="csrf" value="[0-9a-f]{64}"/);
   }));
 
-test("channels page lists channels with linked projects, membership labels and link/unlink forms", () =>
+test("channels page groups channels by projects with chips, bot pills and a sheet link", () =>
   withApp(async ({ auth, base, store }) => {
     seedChannels(store);
     store.link("C1", "p1");
     store.link("C1", "p2");
     const text = await (await fetch(`${base}/admin/channels`, { headers: auth })).text();
-    assert.match(text, /#test/);
-    assert.match(text, /#ventas/);
-    assert.match(text, /El bot participa/);
-    assert.match(text, /Invita al bot al canal/);
-    assert.equal((text.match(/action="\/admin\/channels\/unlink"/g) ?? []).length, 2);
-    // C2 has no links yet: it offers both projects; C1 has nothing left to link.
-    assert.equal((text.match(/action="\/admin\/channels\/link"/g) ?? []).length, 1);
-    assert.match(text, /<option value="p1">Web<\/option>/);
+    assert.ok(text.indexOf("Con proyectos") < text.indexOf("#test") && text.indexOf("#test") < text.indexOf("Sin proyectos"));
+    assert.ok(text.indexOf("Sin proyectos") < text.indexOf("#ventas"));
+    assert.match(text, /Bot en el canal/);
+    assert.match(text, /Invita al bot con \/invite/);
+    assert.equal((text.match(/aria-label="Quitar /g) ?? []).length, 2);
+    assert.equal((text.match(/<a href="\/admin\/channels\/C[12]\/projects" data-sheet/g) ?? []).length, 2);
+    assert.doesNotMatch(text, /channels\/(link|unlink)/);
+  }));
+
+test("channels page filters by name on the server, ignoring accents and case", () =>
+  withApp(async ({ auth, base, store }) => {
+    store.upsertChannel({ id: "C1", name: "gestión", isMember: true });
+    store.upsertChannel({ id: "C2", name: "ventas", isMember: true });
+    const text = await (await fetch(`${base}/admin/channels?q=GESTION`, { headers: auth })).text();
+    assert.match(text, /#gestión/);
+    assert.doesNotMatch(text, /#ventas/);
+    assert.match(text, /value="GESTION"/);
+  }));
+
+const removeChip = async (h: Harness, channel: string, project: string, extra: Record<string, string> = {}, token?: string): Promise<Response> =>
+  fetch(`${h.base}/admin/channels/${channel}/projects/${project}/remove`, {
+    method: "POST", redirect: "manual",
+    headers: { ...h.auth, origin: `http://${h.host}`, "content-type": "application/x-www-form-urlencoded" },
+    body: form({ csrf: token ?? h.csrf, ...extra }),
+  });
+
+test("removing a chip unlinks only that pair, keeps a non-empty q in the redirect and leaves concurrent additions alone", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    h.store.link("C1", "p1");
+    h.store.link("C2", "p1");
+    const res = await removeChip(h, "C1", "p1");
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get("location"), "/admin/channels?status=project-removed");
+    assert.deepEqual(h.store.projectsForChannel("C1"), []);
+    assert.deepEqual(h.store.projectsForChannel("C2").map((p) => p.id), ["p1"]);
+    h.store.link("C1", "p2");
+    const again = await removeChip(h, "C1", "p1", { q: "tést &x" });
+    assert.equal(again.headers.get("location"), "/admin/channels?status=project-removed&q=t%C3%A9st%20%26x");
+    assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p2"]);
+    const page = await (await fetch(`${h.base}/admin/channels?status=project-removed`, { headers: h.auth })).text();
+    assert.match(page, /Proyecto quitado del canal/);
+  }));
+
+test("chip removal validates ids, Origin, session and csrf", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    h.store.link("C1", "p1");
+    for (const [channel, project] of [["C9", "p1"], ["C1", "NOPE"], ["c1", "p1"], ["C1", "%E0%A4%A"], ["C1%2F..", "p1"]] as [string, string][]) {
+      assert.equal((await removeChip(h, channel, project)).status, 400, `${channel} ${project}`);
+    }
+    assert.equal((await removeChip(h, "C1", "p1", {}, "0".repeat(64))).status, 403);
+    const url = `${h.base}/admin/channels/C1/projects/p1/remove`;
+    const post = (headers: Record<string, string>) => fetch(url, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body: form({ csrf: h.csrf }) });
+    assert.equal((await post({ ...h.auth, origin: "https://evil.example" })).status, 403);
+    assert.equal((await post({ origin: `http://${h.host}` })).status, 401);
+    assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p1"]);
+  }));
+
+test("refresh keeps a non-empty q in the redirect", () =>
+  withApp(async (h) => {
+    assert.equal((await submit(h, "/admin/channels/refresh", { q: "ges" })).headers.get("location"), "/admin/channels?status=refreshed&q=ges");
+    assert.equal((await submit(h, "/admin/channels/refresh", { q: "" })).headers.get("location"), "/admin/channels?status=refreshed");
+  }));
+
+const sheetGet = (h: Harness, path: string, headers: Record<string, string> = {}): Promise<Response> =>
+  fetch(`${h.base}${path}`, { headers: { ...h.auth, ...headers }, redirect: "manual" });
+
+test("the sheet page renders the full page, or only the fragment with X-Admin-Fragment", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    h.store.link("C1", "p1");
+    h.store.link("C2", "p1");
+    const full = await sheetGet(h, "/admin/channels/C1/projects");
+    assert.equal(full.status, 200);
+    assert.equal(full.headers.get("cache-control"), "no-store");
+    const page = await full.text();
+    assert.match(page, /class="sidebar"/);
+    assert.match(page, /value="p1" checked/);
+    assert.match(page, /También en #ventas/);
+    assertNoInlineCode(page);
+    const frag = await sheetGet(h, "/admin/channels/C1/projects?q=we", { "x-admin-fragment": "1" });
+    assert.equal(frag.status, 200);
+    assert.equal(frag.headers.get("cache-control"), "no-store");
+    assert.equal(frag.headers.get("vary"), "X-Admin-Fragment");
+    assert.equal(full.headers.get("vary"), "X-Admin-Fragment");
+    const text = await frag.text();
+    assert.doesNotMatch(text, /<html|sidebar/);
+    assert.match(text, /Proyectos de #test/);
+    assert.match(text, /value="p1"/);
+    assert.doesNotMatch(text, /type="checkbox" name="project" value="p2"/);
+  }));
+
+test("the sheet page answers 404 for unknown or malformed channels and redirects to login with next", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    for (const path of ["/admin/channels/C9/projects", "/admin/channels/c1/projects", "/admin/channels/%E0%A4%A/projects", "/admin/channels/%3Cscript%3E/projects"]) {
+      const res = await sheetGet(h, path);
+      assert.equal(res.status, 404, path);
+      assert.doesNotMatch(await res.text(), /<script>/);
+    }
+    const anon = await fetch(`${h.base}/admin/channels/C1/projects?q=a`, { redirect: "manual" });
+    assert.equal(anon.status, 303);
+    assert.equal(anon.headers.get("location"), "/admin/login?next=%2Fadmin%2Fchannels%2FC1%2Fprojects%3Fq%3Da");
+  }));
+
+test("admin.js is served from the page and wires the sheet dialog with a navigation fallback", () =>
+  withApp(async (h) => {
+    const page = await (await fetch(`${h.base}/admin/channels`, { headers: h.auth })).text();
+    const src = /<script src="([^"]+admin\.js[^"]*)"/.exec(page)?.[1] ?? "";
+    const res = await fetch(`${h.base}${src}`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /javascript/);
+    const code = await res.text();
+    for (const needle of ["a[data-sheet]", "X-Admin-Fragment", "showModal", "window.location.href", "data-close", "res.redirected", "data-fold", "busy"]) assert.ok(code.includes(needle), needle);
+    assert.doesNotMatch(code, /eval\(|new Function/);
+  }));
+
+test("the old link and unlink routes are gone", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    for (const route of ["link", "unlink"]) {
+      assert.equal((await submit(h, `/admin/channels/${route}`, { channel: "C1", project: "p1" })).status, 404);
+    }
+    assert.deepEqual(h.store.projectsForChannel("C1"), []);
   }));
 
 test("channels page pulls the project list from Linear into the store", () =>
   withApp(async ({ auth, base, store }) => {
     store.upsertChannel({ id: "C1", name: "test", isMember: true });
     const text = await (await fetch(`${base}/admin/channels`, { headers: auth })).text();
-    assert.match(text, /<option value="px">Proyecto X<\/option>/);
     assert.deepEqual(store.listProjects(), [{ id: "px", name: "Proyecto X" }]);
   }, { projects: async () => [{ id: "px", name: "Proyecto X" }] }));
 
@@ -629,59 +745,17 @@ test("a Slack failure on refresh keeps the stored list and shows an error", asyn
   }, { logs, channels: async () => { throw new Error("missing_scope"); } });
 });
 
-test("link and unlink change the routing and a duplicate link is a no-op", () =>
-  withApp(async (h) => {
-    seedChannels(h.store);
-    const link = await submit(h, "/admin/channels/link", { channel: "C1", project: "p1" });
-    assert.equal(link.status, 303);
-    assert.equal(link.headers.get("location"), "/admin/channels?status=linked");
-    assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p1"]);
-    const again = await submit(h, "/admin/channels/link", { channel: "C1", project: "p1" });
-    assert.equal(again.headers.get("location"), "/admin/channels?status=exists");
-    await submit(h, "/admin/channels/link", { channel: "C2", project: "p1" });
-    assert.deepEqual(h.store.channelsFor("p1").map((c) => c.id), ["C1", "C2"]);
-    const unlink = await submit(h, "/admin/channels/unlink", { channel: "C1", project: "p1" });
-    assert.equal(unlink.headers.get("location"), "/admin/channels?status=unlinked");
-    assert.deepEqual(h.store.channelsFor("p1").map((c) => c.id), ["C2"]);
-    const missing = await submit(h, "/admin/channels/unlink", { channel: "C1", project: "p1" });
-    assert.equal(missing.headers.get("location"), "/admin/channels?status=not-found");
-  }));
-
-test("linking an unknown channel or project is rejected without touching the store", () =>
-  withApp(async (h) => {
-    seedChannels(h.store);
-    for (const fields of [{ channel: "NOPE", project: "p1" }, { channel: "C1", project: "NOPE" }, {} as Record<string, string>]) {
-      const res = await submit(h, "/admin/channels/link", fields);
-      assert.equal(res.headers.get("location"), "/admin/channels?status=not-found");
-    }
-    assert.deepEqual(h.store.projectsForChannel("C1"), []);
-  }));
-
 test("channel POSTs enforce Origin and csrf and change nothing when rejected", () =>
   withApp(async (h) => {
     seedChannels(h.store);
     const post = (headers: Record<string, string>, body: string) =>
-      fetch(`${h.base}/admin/channels/link`, {
+      fetch(`${h.base}/admin/channels/C1/projects`, {
         method: "POST", redirect: "manual", headers: { ...h.auth, "content-type": "application/x-www-form-urlencoded", ...headers }, body,
       });
-    const fields = { channel: "C1", project: "p1" };
-    assert.equal((await post({ origin: "https://evil.example" }, form({ ...fields, csrf: "0".repeat(64) }))).status, 403);
-    assert.equal((await submit(h, "/admin/channels/link", fields, "forged")).status, 403);
+    const fields = { project: "p1" };
+    assert.equal((await post({ origin: "https://evil.example" }, form({ ...fields, csrf: h.csrf }))).status, 403);
+    assert.equal((await submit(h, "/admin/channels/C1/projects", fields, "forged")).status, 403);
     assert.equal((await post({ origin: `http://${h.host}` }, form(fields))).status, 403);
-    assert.deepEqual(h.store.projectsForChannel("C1"), []);
-  }));
-
-test("a cross-origin POST with a valid token is still rejected", () =>
-  withApp(async (h) => {
-    seedChannels(h.store);
-    const page = await (await fetch(`${h.base}/admin/channels`, { headers: h.auth })).text();
-    const csrf = /name="csrf" value="([0-9a-f]+)"/.exec(page)?.[1] ?? "";
-    const res = await fetch(`${h.base}/admin/channels/link`, {
-      method: "POST", redirect: "manual",
-      headers: { ...h.auth, origin: "https://evil.example", "content-type": "application/x-www-form-urlencoded" },
-      body: form({ csrf, channel: "C1", project: "p1" }),
-    });
-    assert.equal(res.status, 403);
     assert.deepEqual(h.store.projectsForChannel("C1"), []);
   }));
 

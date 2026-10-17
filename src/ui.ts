@@ -45,6 +45,6 @@ type SheetOptions = { title: string; closeHref: string; body: Html };
 
 export const sheet = ({ title, closeHref, body }: SheetOptions): Html =>
   html`<section class="sheet" aria-labelledby="sheet-title">
-<header class="sheet-header"><h2 id="sheet-title">${title}</h2><a href="${closeHref}" class="btn btn-secondary">Cerrar</a></header>
+<header class="sheet-header"><h2 id="sheet-title">${title}</h2><a href="${closeHref}" class="btn btn-secondary" data-close>Cerrar</a></header>
 <div class="sheet-body">${body}</div>
 </section>`;

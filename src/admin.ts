@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { channelsPage, filterChannels, MAX_QUERY, sheetFragment, sheetPage } from "./admin-channels.ts";
 import { statusPage } from "./admin-status.ts";
 import { serveAsset } from "./assets.ts";
 import { SESSION_SECRET_MIN_BYTES } from "./config.ts";
@@ -15,7 +16,7 @@ import { clientIp, createRateLimiter } from "./ratelimit.ts";
 import type { RateLimiter } from "./ratelimit.ts";
 import { SESSION_COOKIE, clearSessionCookie, csrfFor, readCookie, safeNext, sessionCookie, signSession, verifySession } from "./session.ts";
 import type { SlackApi } from "./slack.ts";
-import type { Channel, MatchSource, Person, Project, Store } from "./store.ts";
+import type { MatchSource, Person, Store } from "./store.ts";
 import { button, emptyState, flash, pill } from "./ui.ts";
 import type { Tone } from "./ui.ts";
 
@@ -59,6 +60,7 @@ const safeDecode = (value: string): string => {
 const MAX_FORM_BYTES = 100_000;
 const MAX_CHANNEL_PROJECTS = 200;
 const CHANNEL_PROJECTS_ROUTE = /^\/admin\/channels\/([^/]+)\/projects$/;
+const CHANNEL_PROJECT_REMOVE_ROUTE = /^\/admin\/channels\/([^/]+)\/projects\/([^/]+)\/remove$/;
 const CHANNEL_ID = /^[A-Z0-9]{1,32}$/;
 type Page = (options: { title: string; current: NavKey; body: Html }) => Html;
 // Per-request view of the authenticated session: the render function embeds its logout CSRF token.
@@ -67,11 +69,8 @@ type Ctx = { csrf: string; render: Page };
 // Flash messages come from a fixed table keyed by a query value: free text is never reflected.
 const FLASH: Record<string, { ok: boolean; text: string }> = {
   refreshed: { ok: true, text: "Lista de canales actualizada." },
-  linked: { ok: true, text: "Proyecto vinculado al canal." },
-  unlinked: { ok: true, text: "Proyecto desvinculado del canal." },
+  "project-removed": { ok: true, text: "Proyecto quitado del canal." },
   "channel-saved": { ok: true, text: "Proyectos del canal guardados." },
-  exists: { ok: true, text: "El proyecto ya estaba vinculado a ese canal." },
-  "not-found": { ok: false, text: "No se encontró el canal o el proyecto indicado." },
   "slack-error": { ok: false, text: "No se pudo consultar Slack. Se muestra la última lista guardada." },
   synced: { ok: true, text: "Personas emparejadas con Slack por correo." },
   "synced-partial": { ok: false, text: "Emparejado parcial: algunas personas no se pudieron consultar en Slack. Se conservaron sus vínculos anteriores." },
@@ -85,51 +84,6 @@ const FLASH: Record<string, { ok: boolean; text: string }> = {
 const flashNotice = (status: string | null): Html | "" => {
   const entry = status && Object.hasOwn(FLASH, status) ? FLASH[status] : undefined;
   return entry ? flash(entry.ok, entry.text) : "";
-};
-
-type ChannelsView = {
-  channels: Channel[];
-  projects: Project[];
-  linksOf: (channelId: string) => Project[];
-  linearDown: boolean;
-  flash: string | null;
-  csrf: string;
-  render: Page;
-};
-
-const channelForm = (action: string, csrf: string, channelId: string, inner: Html): Html =>
-  html`<form method="post" action="${action}"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="channel" value="${channelId}">${inner}</form>`;
-
-const channelRow = (channel: Channel, view: ChannelsView): Html => {
-  const linked = view.linksOf(channel.id);
-  const available = view.projects.filter((project) => !linked.some((l) => l.id === project.id));
-  const membership = channel.isMember
-    ? html`<span class="joined">${pill("success", "El bot participa")}</span>`
-    : html`${pill("warning", "El bot no participa")} <span class="muted">Invita al bot al canal (/invite) para recibir avisos</span>`;
-  const items = linked.map((project) =>
-    html`<li>${project.name} ${channelForm("/admin/channels/unlink", view.csrf, channel.id, html`<input type="hidden" name="project" value="${project.id}">${button({ label: "Desvincular" })}`)}</li>`);
-  const addForm = available.length
-    ? channelForm("/admin/channels/link", view.csrf, channel.id, html`<label>Proyecto <select name="project">${available.map((p) => html`<option value="${p.id}">${p.name}</option>`)}</select></label> ${button({ label: "Vincular", variant: "primary" })}`)
-    : "";
-  return html`<tr data-channel>
-<td>#${channel.name}</td>
-<td>${membership}</td>
-<td>${linked.length ? html`<ul>${items}</ul>` : html`<span class="muted">Sin proyectos vinculados</span>`}${addForm}</td>
-</tr>`;
-};
-
-const channelsPage = (view: ChannelsView): Html => {
-  const warning = view.linearDown
-    ? flash(false, "No se pudo consultar Linear. Solo se pueden vincular los proyectos ya conocidos.")
-    : "";
-  const refresh = html`<form method="post" action="/admin/channels/refresh"><input type="hidden" name="csrf" value="${view.csrf}">${button({ label: "Actualizar canales desde Slack" })}</form>`;
-  const table = view.channels.length
-    ? html`<div class="card"><table>
-<thead><tr><th scope="col">Canal</th><th scope="col">Bot</th><th scope="col">Proyectos de Linear</th></tr></thead>
-<tbody>${view.channels.map((channel) => channelRow(channel, view))}</tbody>
-</table></div>`
-    : emptyState("Aún no hay canales.", "Usa «Actualizar canales desde Slack» para cargarlos.");
-  return view.render({ title: "Canales", current: "channels", body: html`${flashNotice(view.flash)}${warning}<div class="toolbar">${refresh}</div>${table}` });
 };
 
 const SOURCES: Record<MatchSource, string> = { auto: "Automático", manual: "Manual", unmatched: "Sin vincular" };
@@ -185,7 +139,7 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
   const logUpstream = (what: string, error: unknown): void =>
     logger.error(`${what} failed: ${error instanceof Error ? error.message : "unknown error"}`);
 
-  const channels = async (res: ServerResponse, status: string | null, { csrf, render }: Ctx): Promise<void> => {
+  const channels = async (res: ServerResponse, search: URLSearchParams, { csrf, render }: Ctx): Promise<void> => {
     let linearDown = false;
     try {
       if (!linear?.listProjects) throw new Error("Linear unavailable");
@@ -194,10 +148,25 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
       logUpstream("Linear project list", error);
       linearDown = true;
     }
+    const q = (search.get("q") ?? "").trim().slice(0, MAX_QUERY);
     page(res, 200, channelsPage({
-      channels: store.listChannels(), projects: store.listProjects(), linksOf: (id) => store.projectsForChannel(id),
-      linearDown, flash: status, csrf, render,
-    }));
+      channels: filterChannels(store.listChannels(), q), linksOf: (id) => store.projectsForChannel(id),
+      linearDown, notice: flashNotice(search.get("status")), csrf, q,
+    }, render));
+  };
+
+  // The sheet is a full page; with X-Admin-Fragment it returns only the sheet for the dialog.
+  const channelSheet = (req: IncomingMessage, res: ServerResponse, rawId: string, search: URLSearchParams, { csrf, render }: Ctx): void => {
+    const channel = store.listChannels().find((c) => c.id === safeDecode(rawId));
+    if (!channel) return send(res, 404, { error: "not found" }, SECURITY_HEADERS);
+    const view = {
+      channel, projects: store.listProjects(), linked: new Set(store.projectsForChannel(channel.id).map((p) => p.id)),
+      othersOf: (projectId: string) => store.channelsFor(projectId).filter((c) => c.id !== channel.id).map((c) => c.name),
+      csrf, q: (search.get("q") ?? "").trim().slice(0, MAX_QUERY),
+    };
+    const content = req.headers["x-admin-fragment"] === "1" ? sheetFragment(view) : sheetPage(view, render);
+    // The same URL answers a fragment or a full page, so caches must key on the header.
+    sendHtml(res, 200, content.value, { ...SECURITY_HEADERS, vary: "X-Admin-Fragment" });
   };
 
   const people = async (res: ServerResponse, status: string | null, { csrf, render }: Ctx): Promise<void> => {
@@ -220,16 +189,20 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     page(res, 200, peoplePage(store.listPeople().filter((person) => person.active !== false), linearDown, status, csrf, render));
   };
 
-  const get = async (res: ServerResponse, path: string, search: URLSearchParams, ctx: Ctx): Promise<void> => {
+  const get = async (req: IncomingMessage, res: ServerResponse, path: string, search: URLSearchParams, ctx: Ctx): Promise<void> => {
     const route = path.replace(/\/+$/, "") || "/";
     if (route === "/admin") return redirect(res, "/admin/status", SECURITY_HEADERS);
     if (route === "/admin/status") return page(res, 200, statusPage(store, { timeZone, now: now(), showAll: search.get("all") === "1", q: search.get("q") ?? "" }, ctx.render));
-    if (route === "/admin/channels") return channels(res, search.get("status"), ctx);
+    if (route === "/admin/channels") return channels(res, search, ctx);
+    const sheetRoute = CHANNEL_PROJECTS_ROUTE.exec(route);
+    if (sheetRoute) return channelSheet(req, res, sheetRoute[1] ?? "", search, ctx);
     if (route === "/admin/people") return people(res, search.get("status"), ctx);
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
 
-  const done = (res: ServerResponse, status: string, section = "channels"): void => redirect(res, `/admin/${section}?status=${status}`, SECURITY_HEADERS);
+  // `q` is re-appended only when non-empty, so a filtered Canales list survives the redirect.
+  const done = (res: ServerResponse, status: string, section = "channels", q = ""): void =>
+    redirect(res, `/admin/${section}?status=${status}${q ? `&q=${encodeURIComponent(q)}` : ""}`, SECURITY_HEADERS);
 
   const lookupEmail = async (email: string): Promise<string | null> => {
     try {
@@ -269,22 +242,15 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     return back({ set: "override-set", invalid: "invalid-slack-id", "not-found": "person-not-found" }[setOverride(store, user, slackId)]);
   };
 
-  const channelsPost = async (res: ServerResponse, route: string, form: Record<string, string>): Promise<void> => {
-    if (route === "/admin/channels/refresh") {
-      try {
-        if (!slack?.listChannels) throw new Error("Slack unavailable");
-        for (const channel of await slack.listChannels()) store.upsertChannel(channel);
-      } catch (error) {
-        logUpstream("Slack channel list", error);
-        return done(res, "slack-error");
-      }
-      return done(res, "refreshed");
+  const channelsRefresh = async (res: ServerResponse, q: string): Promise<void> => {
+    try {
+      if (!slack?.listChannels) throw new Error("Slack unavailable");
+      for (const channel of await slack.listChannels()) store.upsertChannel(channel);
+    } catch (error) {
+      logUpstream("Slack channel list", error);
+      return done(res, "slack-error", "channels", q);
     }
-    const { channel, project } = form;
-    const known = store.listChannels().some((c) => c.id === channel) && store.listProjects().some((p) => p.id === project);
-    if (!channel || !project || !known) return done(res, "not-found");
-    if (route === "/admin/channels/link") return done(res, store.link(channel, project) ? "linked" : "exists");
-    return done(res, store.unlink(channel, project) ? "unlinked" : "not-found");
+    done(res, "refreshed", "channels", q);
   };
 
   // Replaces the channel's links with the repeated `project` fields; validates everything before the single transaction.
@@ -297,6 +263,17 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     if (!valid) return send(res, 400, { error: "invalid request" }, SECURITY_HEADERS);
     store.setChannelProjects(channelId, projectIds);
     done(res, "channel-saved");
+  };
+
+  // Unlinks one pair only; unknown ids are rejected like in the save, and an already-missing link is a no-op.
+  const channelProjectRemove = (res: ServerResponse, rawChannel: string, rawProject: string, q: string): void => {
+    const channelId = safeDecode(rawChannel);
+    const projectId = safeDecode(rawProject);
+    const valid = CHANNEL_ID.test(channelId) && store.listChannels().some((c) => c.id === channelId)
+      && store.listProjects().some((p) => p.id === projectId);
+    if (!valid) return send(res, 400, { error: "invalid request" }, SECURITY_HEADERS);
+    store.unlink(channelId, projectId);
+    done(res, "project-removed", "channels", q.trim().slice(0, MAX_QUERY));
   };
 
   // Same-origin check plus the form body; answers 403/413/400 itself and returns null when it cannot.
@@ -320,7 +297,9 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
     if (!safeEqual(form.csrf ?? "", csrf)) return send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
     const route = path.replace(/\/+$/, "");
     if (route === "/admin/logout") return redirect(res, "/admin/login?status=logged-out", { ...SECURITY_HEADERS, "set-cookie": clearSessionCookie() });
-    if (["/admin/channels/refresh", "/admin/channels/link", "/admin/channels/unlink"].includes(route)) return channelsPost(res, route, form);
+    if (route === "/admin/channels/refresh") return channelsRefresh(res, (form.q ?? "").trim().slice(0, MAX_QUERY));
+    const removal = CHANNEL_PROJECT_REMOVE_ROUTE.exec(route);
+    if (removal) return channelProjectRemove(res, removal[1] ?? "", removal[2] ?? "", form.q ?? "");
     const sheet = CHANNEL_PROJECTS_ROUTE.exec(route);
     if (sheet) return channelProjectsPost(res, sheet[1] ?? "", params);
     if (route === "/admin/people/sync" || route === "/admin/people/override") return peoplePost(res, route, form);
@@ -383,7 +362,7 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
       }
       const csrf = csrfFor(secret, session);
       const ctx: Ctx = { csrf, render: ({ title, current, body }) => shell({ title, current, envLabel, timeZone, body, logoutCsrf: csrf }) };
-      if (req.method === "GET" || req.method === "HEAD") await get(res, path, url.searchParams, ctx);
+      if (req.method === "GET" || req.method === "HEAD") await get(req, res, path, url.searchParams, ctx);
       else if (req.method === "POST") await post(req, res, path, csrf);
       else send(res, 405, { error: "method not allowed" }, { ...SECURITY_HEADERS, allow: "GET, HEAD, POST" });
     } catch (error) {

@@ -144,3 +144,19 @@ dialog::backdrop { background: rgba(0, 0, 0, .35); }
   .stats { gap: 8px; }
 }
 @media (prefers-reduced-motion: no-preference) { .btn, .nav-item { transition: background-color .15s ease; } }
+
+/* Canales: rows, chips and the project sheet */
+.ch { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 4px 0; }
+.ch-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.ch-name { font-weight: 600; }
+.ch-add { margin-left: auto; font-size: 14px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 12px; border-radius: 999px; background: var(--line-soft); font-size: 14px; }
+.chip-form { display: inline; margin: 0; }
+.chip-x { min-width: 32px; min-height: 32px; border: 0; border-radius: 50%; background: transparent; color: var(--text-2); font: inherit; cursor: pointer; }
+.chip-x:hover, .chip-x:focus-visible { background: rgba(0, 0, 0, .08); color: inherit; }
+.check { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; width: 100%; min-height: 44px; cursor: pointer; }
+.check input { width: 20px; height: 20px; }
+.check-name { font-weight: 500; }
+.sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.check[hidden] { display: none; }

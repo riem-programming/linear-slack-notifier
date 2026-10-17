@@ -142,8 +142,8 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - Linear ticket: "Admin: guardado atómico de proyectos por canal" - Ruta de hoja por canal con checklist de proyectos y guardado en una sola operación con diff de vínculos.
 - Files: `src/store.ts`, `src/admin-channels.ts`, `src/admin.ts`, `test/store.test.ts`, `test/admin.test.ts`.
 - [x] 4a.1 RED: `setChannelProjects`: adds, removes, unchanged no-op, other channels untouched, rollback on storage error, returns `{linked, unlinked}`.
-- [ ] 4a.2 (deferred to 4b, with the sheet UI) RED: `GET /admin/channels/:id/projects` renders pre-checked list, "También en #x" hint, 404 for unknown channel, redirects to login with `next`, escapes id.
-- [x] 4a.3 (POST part done; chip unlink route kept, `/admin/channels/link` removal moves to 4b) RED: `POST` same URL: CSRF required, repeated `project`, max 200, unknown project or channel 400 with nothing changed, 303 with flash; chip unlink via `/admin/channels/unlink`; `/admin/channels/link` removed.
+- [x] 4a.2 (done in 4b, with the sheet UI) RED: `GET /admin/channels/:id/projects` renders pre-checked list, "También en #x" hint, 404 for unknown channel, redirects to login with `next`, escapes id.
+- [x] 4a.3 (POST part in 4a; old `/admin/channels/link` and `/unlink` removed in 4b) RED: `POST` same URL: CSRF required, repeated `project`, max 200, unknown project or channel 400 with nothing changed, 303 with flash; chip unlink via `/admin/channels/unlink`; `/admin/channels/link` removed.
 - [x] 4a.4 GREEN (store method and POST handler; GET sheet with 4b): implement store method, sheet handlers, `URLSearchParams` parsing (U13).
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: open `/admin/channels/<id>/projects` directly; check several projects and save; unchecking removes the link; saving unchanged does nothing; a tampered project id returns 400. The old Canales list may still show the old select until 4b.
@@ -156,10 +156,10 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(admin): redesign Canales screen with chips, groups, search and sheets`
 - Linear ticket: "Admin: nueva pantalla Canales" - Canales agrupados con y sin proyectos, chips con quitar, estado del bot, búsqueda y hoja para agregar proyectos.
 - Files: `src/admin-channels.ts`, `src/public/admin.js`, `src/public/admin.css`, `src/admin.ts`, `test/admin-channels.test.ts`, `test/admin.test.ts`.
-- [ ] 4b.1 RED: `filterChannels` (accents, case); grouping Con/Sin proyectos; chips with remove forms; bot pill and "Invita al bot con /invite"; `?q=` search; hostile names escaped.
-- [ ] 4b.2 RED: `X-Admin-Fragment: 1` returns sheet body only, `no-store`; without it the full page; "Agregar proyecto" links have `data-sheet`.
-- [ ] 4b.3 GREEN: renderer, search form, fragment detection, CSS.
-- [ ] 4b.4 GREEN: `admin.js` (~40 lines): fetch fragment into one `<dialog>`, `showModal()`, close by form/Esc/backdrop, fallback to `href`.
+- [x] 4b.1 RED: `filterChannels` (accents, case); grouping Con/Sin proyectos; chips with remove forms; bot pill and "Invita al bot con /invite"; `?q=` search; hostile names escaped.
+- [x] 4b.2 RED: `X-Admin-Fragment: 1` returns sheet body only, `no-store`; without it the full page; "Agregar proyecto" links have `data-sheet`.
+- [x] 4b.3 GREEN: renderer, search form, fragment detection, CSS.
+- [x] 4b.4 GREEN: `admin.js` (~40 lines): fetch fragment into one `<dialog>`, `showModal()`, close by form/Esc/backdrop, fallback to `href`.
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: groups and chips correct; search "api"; remove chip works; sheet opens as a dialog, saves, returns to list with flash; Esc and backdrop close without changes.
 - USER prerequisites: manual staging check with JS ON and JS OFF (JS off: "Agregar proyecto" opens the full page and saving works).
