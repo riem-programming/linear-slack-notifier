@@ -1,10 +1,13 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
-import { analyzeEvent } from "./events.ts";
-import type { UserMap } from "./events.ts";
+import { classifyEvent } from "./events.ts";
 import { BodyTooLargeError, parseJson, readBody, send } from "./http.ts";
 import { isFresh, verifySignature } from "./signature.ts";
+import { planMentions, renderNotice } from "./notify.ts";
+import type { PersonLookup } from "./notify.ts";
 import type { SlackResolver } from "./slack.ts";
+
+export type UserMap = Readonly<Record<string, string>>;
 
 type AppOptions = {
   secret: string;
@@ -59,10 +62,17 @@ export const createApp = ({
       return;
     }
 
-    const { message, log, projectId } = analyzeEvent(payload, userMap);
-    if (log) logger.info(log);
+    const lookup: PersonLookup = (id) =>
+      Object.hasOwn(userMap, id) ? { slackUserId: userMap[id] ?? null, name: null } : null;
+    const result = classifyEvent(payload, now());
     send(res, 200, { ok: true });
-    if (!message) return;
+    if (result.kind === "ignored") {
+      logger.info(`Issue event ignored: reason=${result.reason}`);
+      return;
+    }
+    const { projectId } = result;
+    const message = renderNotice(result, planMentions(result, lookup));
+    logger.info(`Issue event: kind=${result.kind}`);
 
     const postToSlack = resolveSlack(projectId);
     if (!postToSlack) {
