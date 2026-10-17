@@ -215,3 +215,36 @@ Completed: 5a.1, 5a.2, 5a.3, 5a.4. Remaining: slice 5b.
 - `SlackMember` follows U14: `realName`, `displayName` (empty string when absent), `handle`, `email | null`; `filterMembers` searches all four; sort by folded `displayName || realName || handle`.
 - Page-cap truncation logs a fixed warning (no ids, no cursor).
 - Stale-list warning includes the Slack error code and fires once per failure episode (reset after a successful refresh). Tests: concurrent callers and a replayed failure both get the stale list. `pnpm test` 409/409, `pnpm typecheck` clean.
+
+## Batch 10: Slice 5b (branch `feat/kamaiti-102-admin-personas-screen`, stacked on slice 5a, Linear KAMAITI-102)
+
+Completed: 5b.1, 5b.2, 5b.3, 5b.4. Remaining: none (all 10 slices applied; next is sdd-verify).
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 5b.1 | `test/admin-people.test.ts` | Unit (pure) | 409 existing | Written, failed (module missing) | 9/9 | title/subtitle/sync button; banner for 0, 1 and N (singular copy, link to the first unmatched person); three pills; Cambiar vs Vincular; "Quitar vínculo" only for manual; empty state; Linear-down notice; hostile values escaped and CSP guard | None needed |
+| 5b.2 | `test/admin-people.test.ts`, `test/admin.test.ts` | Unit and app | 409 existing | Written with 5b.1 and the app tests | 425/425 | radios capped at 50 with "Mostrando 50 de N", query applied, empty results, Slack unavailable shows message and a required paste field only; full page vs fragment, `no-store` and `Vary`; 404 for unknown, inactive and malformed ids; anonymous redirected; Slack failure and missing port both logged without secrets | Old table markup and tests replaced |
+| 5b.3 | `test/admin.test.ts` | App (ephemeral port) | 409 existing | Written, failed (route missing) | 425/425, typecheck clean | picked member must be in the cached list (400 otherwise); no choice gives a flash; pasted id wins over a pick and must match `^[UW][A-Z0-9]+$` (lowercase and a bad paste with a valid pick are rejected); paste works with Slack down, a pick gives a flash; unknown person redirects; CSRF, Origin, missing token and no session rejected with nothing changed | None needed |
+| 5b.4 | covered above | | | | | | `channelSheet` and `personSheet` share `sheetResponse`; `searchForm` exported from `admin-channels.ts` |
+
+### Notes and deviations
+- Route is `/admin/people/:id/link` (GET sheet, POST save) as requested for this slice, not `/admin/people/:id/slack` from design U15. The existing `POST /admin/people/override` stays: it is used only by "Quitar vínculo" (empty Slack id clears the override) and keeps the older direct-set behavior.
+- Picker search is server-side (design U6): the fragment is re-fetched with `?q=` and `admin.js` swaps only the `[data-live-results]` block after a 250 ms debounce, keeping focus and a still-listed pick. Without JS the GET form submits normally. No browser test exists; a manual JS ON and OFF check on staging is required.
+- Sheet header: the shared `sheet` component renders the "Vincular a <name>" title; the avatar and "<email> · elige su cuenta de Slack" line sit at the top of the body.
+- New flash keys: `member-missing` and `members-error`. Singular banner copy: "1 persona sin vincular: su mención sale como texto."
+- The Slack id is no longer shown in the rows (not part of the approved layout). Inactive people answer 404 on the sheet and "person-not-found" on POST.
+- No new runtime dependencies. `pnpm test` 425/425, `pnpm typecheck` clean.
+
+### Success criteria status (proposal section 10)
+Code-level coverage by automated tests; staging checks remain for the user.
+- [x] Session redirect, `next` allow-list (2b tests)
+- [x] Wrong password message and 429 on the 6th failure (2b tests)
+- [x] Cookie flags, 8h expiry, logout, password rotation (2a/2b tests)
+- [x] POST without session or CSRF rejected with no state change (2b, 4a, 5b tests)
+- [x] Basic Auth ignored; webhooks and /health unchanged (2b tests)
+- [x] Estado search finds events beyond the latest 50 and counters match rows (3a/3b tests)
+- [x] One Canales sheet save links and unlinks several projects (4a/4b tests)
+- [x] A person can be matched by picking a Slack member; paste fallback validates the id (5b tests)
+- [ ] Phone width and JS-off on every screen, no emoji, "tú" copy: JS-off paths are covered by tests (full-page sheets, GET forms) and copy was reviewed; the phone-width and JS-on browser check is pending on staging
+- [x] `pnpm test` and `pnpm typecheck` pass
