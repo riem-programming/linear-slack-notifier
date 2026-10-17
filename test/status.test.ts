@@ -9,6 +9,7 @@ const NOW = Date.parse("2026-10-16T15:00:00Z");
 
 const issue = (identifier: string, extra: Partial<SnapshotIssue> = {}): SnapshotIssue => ({
   identifier,
+  url: `https://linear.app/t/issue/${identifier}`,
   title: `Title ${identifier}`,
   dueDate: null,
   completedAt: null,
@@ -66,6 +67,8 @@ test("overdue and due-this-week use the local calendar day and exclude completed
       issue("K-today", { dueDate: "2026-10-16" }),
       issue("K-sunday", { dueDate: "2026-10-18" }),
       issue("K-next", { dueDate: "2026-10-19" }),
+      issue("K-edge", { dueDate: "2026-10-22" }),
+      issue("K-beyond", { dueDate: "2026-10-23" }),
       issue("K-done", { dueDate: "2026-10-10", state: done }),
       issue("K-canceled", { dueDate: "2026-10-17", state: canceled }),
       issue("K-nodue"),
@@ -74,17 +77,26 @@ test("overdue and due-this-week use the local calendar day and exclude completed
     TZ,
   );
   assert.deepEqual(summary.overdue.map((i) => i.identifier), ["K-old", "K-yesterday"]);
-  assert.deepEqual(summary.dueThisWeek.map((i) => i.identifier), ["K-today", "K-sunday"]);
+  assert.deepEqual(summary.dueSoon.map((i) => i.identifier), ["K-today", "K-sunday", "K-next", "K-edge"]);
 });
 
-test("the week ends on Sunday: on a Sunday only today is due this week, on a Monday the whole week", () => {
-  const issues = [issue("K-sun", { dueDate: "2026-10-18" }), issue("K-mon", { dueDate: "2026-10-19" }), issue("K-sun2", { dueDate: "2026-10-25" })];
+test("due soon covers today through today+6 (7 calendar days) regardless of the weekday", () => {
+  const issues = [
+    issue("K-t", { dueDate: "2026-10-18" }),
+    issue("K-6", { dueDate: "2026-10-24" }),
+    issue("K-7", { dueDate: "2026-10-25" }),
+    issue("K-prev", { dueDate: "2026-10-17" }),
+  ];
+  // Sunday 18 Oct in Lima: includes next Saturday (24), excludes next Sunday (25).
   const sunday = summarizeProject(snapshot(issues), Date.parse("2026-10-18T17:00:00Z"), TZ);
-  assert.deepEqual(sunday.dueThisWeek.map((i) => i.identifier), ["K-sun"]);
-  assert.deepEqual(sunday.overdue, []);
+  assert.deepEqual(sunday.dueSoon.map((i) => i.identifier), ["K-t", "K-6"]);
+  assert.deepEqual(sunday.overdue.map((i) => i.identifier), ["K-prev"]);
+  // Monday 19 Oct: the window ends Sunday 25.
   const monday = summarizeProject(snapshot(issues), Date.parse("2026-10-19T17:00:00Z"), TZ);
-  assert.deepEqual(monday.dueThisWeek.map((i) => i.identifier), ["K-mon", "K-sun2"]);
-  assert.deepEqual(monday.overdue.map((i) => i.identifier), ["K-sun"]);
+  assert.deepEqual(monday.dueSoon.map((i) => i.identifier), ["K-6", "K-7"]);
+  // Month boundary: from 28 Dec the window ends 3 Jan.
+  const year = summarizeProject(snapshot([issue("K-a", { dueDate: "2027-01-03" }), issue("K-b", { dueDate: "2027-01-04" })]), Date.parse("2026-12-28T17:00:00Z"), TZ);
+  assert.deepEqual(year.dueSoon.map((i) => i.identifier), ["K-a"]);
 });
 
 test("midnight in Lima decides the day, not UTC", () => {
@@ -93,12 +105,12 @@ test("midnight in Lima decides the day, not UTC", () => {
   const before = summarizeProject(snapshot(issues), Date.parse("2026-10-17T04:59:59Z"), TZ);
   assert.equal(before.today, "2026-10-16");
   assert.equal(before.overdue.length, 0);
-  assert.equal(before.dueThisWeek.length, 1);
+  assert.equal(before.dueSoon.length, 1);
   // One second later it is Saturday 17 in Lima: overdue.
   const after = summarizeProject(snapshot(issues), Date.parse("2026-10-17T05:00:00Z"), TZ);
   assert.equal(after.today, "2026-10-17");
   assert.equal(after.overdue.length, 1);
-  assert.equal(after.dueThisWeek.length, 0);
+  assert.equal(after.dueSoon.length, 0);
   // A time zone ahead of UTC flips the day earlier.
   assert.equal(summarizeProject(snapshot([]), Date.parse("2026-10-16T20:00:00Z"), "Asia/Tokyo").today, "2026-10-17");
 });
@@ -143,10 +155,10 @@ test("renderStatus matches the approved layout, with plain names and Spanish dat
       "Completadas (últimos 7 días): 1",
       "",
       "⚠️ Vencidas (1)",
-      "• KAMAITI-31 Integrar pagos — Luis Pérez (venció 12 oct)",
-      "📅 Vencen esta semana (2)",
-      "• KAMAITI-40 Formulario de contacto — Ana Gómez (vie 16 oct)",
-      "• KAMAITI-44 SEO básico — Sin asignar (dom 18 oct)",
+      "• <https://linear.app/t/issue/KAMAITI-31|KAMAITI-31> Integrar pagos — Luis Pérez (venció 12 oct)",
+      "📅 Vencen en los próximos 7 días (2)",
+      "• <https://linear.app/t/issue/KAMAITI-40|KAMAITI-40> Formulario de contacto — Ana Gómez (vie 16 oct)",
+      "• <https://linear.app/t/issue/KAMAITI-44|KAMAITI-44> SEO básico — Sin asignar (dom 18 oct)",
       "",
       "🎯 Milestone activo: Beta — 67% (2/3)",
     ].join("\n"),
@@ -163,7 +175,7 @@ test("lists are capped at 10 with a '+N más' line while the heading shows the f
   const issues = Array.from({ length: 13 }, (_, i) => issue(`K-${String(i).padStart(2, "0")}`, { dueDate: "2026-10-01" }));
   const lines = renderStatus(summarizeProject(snapshot(issues), NOW, TZ)).split("\n");
   assert.ok(lines.includes("⚠️ Vencidas (13)"));
-  assert.equal(lines.filter((l) => l.startsWith("• K-")).length, 10);
+  assert.equal(lines.filter((l) => l.startsWith("• <")).length, 10);
   assert.ok(lines.includes("+3 más"));
 });
 
@@ -230,9 +242,17 @@ test("Slack formatting characters in user text are neutralized without breaking 
 
 test("long titles are cut at 120 characters with an ellipsis", () => {
   const long = issue("K-1", { title: "x".repeat(300), dueDate: "2026-10-01" });
-  const line = renderStatus(summarizeProject(snapshot([long]), NOW, TZ)).split("\n").find((l) => l.startsWith("• K-1")) ?? "";
+  const line = renderStatus(summarizeProject(snapshot([long]), NOW, TZ)).split("\n").find((l) => l.startsWith("• <")) ?? "";
   assert.ok(line.includes(`${"x".repeat(119)}…`));
   assert.ok(!line.includes("x".repeat(120)));
   const exact = issue("K-2", { title: "y".repeat(120), dueDate: "2026-10-01" });
   assert.ok(renderStatus(summarizeProject(snapshot([exact]), NOW, TZ)).includes("y".repeat(120) + " —"));
+});
+
+test("identifiers link to the issue, with & escaped in the URL and a plain fallback without URL", () => {
+  const linked = issue("K-1", { url: "https://linear.app/t/issue/K-1?a=1&b=2", dueDate: "2026-10-01" });
+  const bare = issue("K-2", { url: "", dueDate: "2026-10-01" });
+  const lines = renderStatus(summarizeProject(snapshot([linked, bare]), NOW, TZ)).split("\n");
+  assert.ok(lines.some((l) => l.startsWith("• <https://linear.app/t/issue/K-1?a=1&amp;b=2|K-1> Title K-1")));
+  assert.ok(lines.some((l) => l.startsWith("• K-2 Title K-2")));
 });

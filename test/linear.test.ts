@@ -160,6 +160,7 @@ test("listUsers marks the result as truncated when the page cap is hit", async (
 
 const issueNode = (n: number, extra: Record<string, unknown> = {}) => ({
   identifier: `K-${n}`,
+  url: `https://linear.app/t/issue/K-${n}`,
   title: `Issue ${n}`,
   dueDate: null,
   completedAt: null,
@@ -198,7 +199,7 @@ test("projectSnapshot sends one aggregated query and maps issues and milestones"
   assert.equal(headers.authorization, "lin_api_secret");
   const body = JSON.parse(calls[0]?.init.body as string) as { query: string; variables: { id: string; after: string | null } };
   assert.deepEqual(body.variables, { id: "p1", after: null, withMilestones: true });
-  for (const field of ["identifier", "dueDate", "completedAt", "position", "assignee", "projectMilestone", "projectMilestones", "pageInfo"]) {
+  for (const field of ["identifier", "url", "dueDate", "completedAt", "position", "assignee", "projectMilestone", "projectMilestones", "pageInfo"]) {
     assert.match(body.query, new RegExp(field));
   }
   assert.equal(snapshot.name, "Web");
@@ -206,6 +207,7 @@ test("projectSnapshot sends one aggregated query and maps issues and milestones"
   assert.deepEqual(snapshot.issues, [
     {
       identifier: "K-1",
+      url: "https://linear.app/t/issue/K-1",
       title: "Issue 1",
       dueDate: "2026-10-18",
       completedAt: "2026-10-15T10:00:00.000Z",

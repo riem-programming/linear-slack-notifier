@@ -13,6 +13,7 @@ export type LinearUserList = LinearUser[] & { truncated?: boolean };
 
 export type SnapshotIssue = {
   identifier: string;
+  url: string; // issue link, empty when Linear sent none
   title: string;
   dueDate: string | null; // YYYY-MM-DD, no time zone
   completedAt: string | null; // ISO instant
@@ -58,7 +59,7 @@ const SNAPSHOT_QUERY = `query ProjectSnapshot($id: String!, $after: String, $wit
     projectMilestones(first: 100) @include(if: $withMilestones) { nodes { id name sortOrder } }
     issues(first: 100, after: $after) {
       nodes {
-        identifier title dueDate completedAt
+        identifier url title dueDate completedAt
         state { name type position }
         assignee { name }
         projectMilestone { id }
@@ -81,6 +82,7 @@ const toIssue = (node: unknown): SnapshotIssue | null => {
   const position = node.state.position;
   return {
     identifier: text(node.identifier),
+    url: text(node.url),
     title: text(node.title),
     dueDate: text(node.dueDate) || null,
     completedAt: text(node.completedAt) || null,

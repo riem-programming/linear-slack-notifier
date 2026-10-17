@@ -1,5 +1,5 @@
 import type { ProjectSnapshot, SnapshotIssue } from "./linear.ts";
-import { escapeText } from "./notify.ts";
+import { escapeText, escapeUrl } from "./notify.ts";
 
 const TITLE_CAP = 120;
 const ZWSP = "​";
@@ -16,14 +16,14 @@ const DIVIDER = "\n\n──────────\n\n";
 const WEEKDAYS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
-export type StatusItem = { identifier: string; title: string; assignee: string | null; dueDate: string };
+export type StatusItem = { identifier: string; url: string; title: string; assignee: string | null; dueDate: string };
 export type ProjectSummary = {
   name: string;
   today: string; // YYYY-MM-DD in the status time zone
   states: { name: string; count: number }[];
   completedLast7Days: number;
   overdue: StatusItem[];
-  dueThisWeek: StatusItem[];
+  dueSoon: StatusItem[]; // today through today+6
   milestone: { name: string; percent: number; done: number; total: number } | null;
   truncated: boolean;
 };
@@ -39,14 +39,14 @@ const weekdayDate = (day: string): string => `${WEEKDAYS[dayOfWeek(day)] ?? ""} 
 const isClosed = (issue: SnapshotIssue): boolean => issue.state.type === "completed" || issue.state.type === "canceled";
 const byDueDate = (a: StatusItem, b: StatusItem): number => a.dueDate.localeCompare(b.dueDate) || a.identifier.localeCompare(b.identifier);
 
-// Weeks run until Sunday: "this week" is today through the coming Sunday (just today on a Sunday).
+// "Due soon" is a 7-calendar-day window in the status time zone: today through today+6, whatever the weekday.
 export const summarizeProject = (snapshot: ProjectSnapshot, now: number, timeZone: string): ProjectSummary => {
   const today = localDay(now, timeZone);
-  const weekEnd = addDays(today, (7 - dayOfWeek(today)) % 7);
+  const windowEnd = addDays(today, 6);
 
   const stateCounts = new Map<string, { count: number; position: number }>();
   const overdue: StatusItem[] = [];
-  const dueThisWeek: StatusItem[] = [];
+  const dueSoon: StatusItem[] = [];
   let completedLast7Days = 0;
   for (const issue of snapshot.issues) {
     const entry = stateCounts.get(issue.state.name) ?? { count: 0, position: issue.state.position };
@@ -56,9 +56,9 @@ export const summarizeProject = (snapshot: ProjectSnapshot, now: number, timeZon
     const completedAt = issue.completedAt ? Date.parse(issue.completedAt) : Number.NaN;
     if (completedAt <= now && completedAt >= now - 7 * DAY_MS) completedLast7Days += 1;
     if (!issue.dueDate || isClosed(issue)) continue;
-    const item = { identifier: issue.identifier, title: issue.title, assignee: issue.assignee, dueDate: issue.dueDate };
+    const item = { identifier: issue.identifier, url: issue.url, title: issue.title, assignee: issue.assignee, dueDate: issue.dueDate };
     if (issue.dueDate < today) overdue.push(item);
-    else if (issue.dueDate <= weekEnd) dueThisWeek.push(item);
+    else if (issue.dueDate <= windowEnd) dueSoon.push(item);
   }
 
   let milestone: ProjectSummary["milestone"] = null;
@@ -77,7 +77,7 @@ export const summarizeProject = (snapshot: ProjectSnapshot, now: number, timeZon
     states: [...stateCounts].sort((a, b) => a[1].position - b[1].position).map(([name, { count }]) => ({ name, count })),
     completedLast7Days,
     overdue: overdue.sort(byDueDate),
-    dueThisWeek: dueThisWeek.sort(byDueDate),
+    dueSoon: dueSoon.sort(byDueDate),
     milestone,
     truncated: snapshot.truncated,
   };
@@ -87,7 +87,8 @@ const renderList = (heading: string, items: StatusItem[], when: (day: string) =>
   if (items.length === 0) return [];
   const lines = items.slice(0, LIST_CAP).map((item) => {
     const who = item.assignee ? esc(item.assignee) : "Sin asignar";
-    return `• ${esc(item.identifier)} ${esc(shorten(item.title))} — ${who} (${when(item.dueDate)})`;
+    const id = item.url ? `<${escapeUrl(item.url)}|${esc(item.identifier)}>` : esc(item.identifier);
+    return `• ${id} ${esc(shorten(item.title))} — ${who} (${when(item.dueDate)})`;
   });
   if (items.length > LIST_CAP) lines.push(`+${items.length - LIST_CAP} más`);
   return [`${heading} (${items.length})`, ...lines];
@@ -99,7 +100,7 @@ export const renderStatus = (summary: ProjectSummary): string => {
   lines.push(`Completadas (últimos 7 días): ${summary.completedLast7Days}`);
   const sections = [
     ...renderList("⚠️ Vencidas", summary.overdue, (day) => `venció ${shortDate(day)}`),
-    ...renderList("📅 Vencen esta semana", summary.dueThisWeek, weekdayDate),
+    ...renderList("📅 Vencen en los próximos 7 días", summary.dueSoon, weekdayDate),
   ];
   if (sections.length) lines.push("", ...sections);
   if (summary.milestone) {
