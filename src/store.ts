@@ -163,7 +163,12 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
         db.exec("COMMIT");
         return { linked: add.length, unlinked: remove.length };
       } catch (error) {
-        db.exec("ROLLBACK");
+        // A failing ROLLBACK must not mask the error that caused it.
+        try {
+          db.exec("ROLLBACK");
+        } catch {
+          // The original error is the one worth reporting.
+        }
         throw error;
       }
     },

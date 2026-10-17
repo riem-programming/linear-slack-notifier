@@ -328,3 +328,16 @@ test("setChannelProjects rolls back every change when one statement fails", () =
   // The connection is usable afterwards (no dangling transaction).
   assert.deepEqual(store.setChannelProjects("C1", ["p2"]), { linked: 1, unlinked: 1 });
 });
+
+test("setChannelProjects surfaces the original error when ROLLBACK itself fails", () => {
+  const { db } = setup();
+  const flaky = new Proxy(db, {
+    get(target, prop) {
+      if (prop === "exec") return (sql: string) => { if (sql === "ROLLBACK") throw new Error("rollback failed"); return target.exec(sql); };
+      const value = Reflect.get(target, prop) as unknown;
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const store = createStore(flaky, clock());
+  assert.throws(() => store.setChannelProjects("C1", ["missing"]), (error: Error) => !/rollback failed/.test(error.message));
+});
