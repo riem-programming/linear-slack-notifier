@@ -1,20 +1,22 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { classifyEvent } from "./events.ts";
-import { BodyTooLargeError, parseJson, readBody, send } from "./http.ts";
+import type { Ignored, IssueNotice } from "./events.ts";
+import { BodyTooLargeError, headerValue, parseJson, readBody, send } from "./http.ts";
 import { isFresh, verifySignature } from "./signature.ts";
-import { planMentions, renderNotice } from "./notify.ts";
-import type { PersonLookup } from "./notify.ts";
-import type { SlackResolver } from "./slack.ts";
-
-export type UserMap = Readonly<Record<string, string>>;
+import { planMentions, renderNotice, routeNotice } from "./notify.ts";
+import type { PersonLookup, RouteResult } from "./notify.ts";
+import type { SlackApi } from "./slack.ts";
+import type { EventEntry, Store } from "./store.ts";
 
 type AppOptions = {
   secret: string;
-  resolveSlack: SlackResolver;
-  userMap?: UserMap;
+  store: Store;
+  slack: Pick<SlackApi, "postMessage">;
   maxBodyBytes?: number;
   now?: () => number;
+  // Runs work after the HTTP ack. Production schedules it on the event loop; tests collect and await it.
+  defer?: (task: () => Promise<void>) => void;
   logger?: Pick<Console, "info" | "error">;
 };
 
@@ -23,14 +25,77 @@ const DEFAULT_MAX_BODY_BYTES = 1_000_000;
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : "unknown error";
 
+const skipped = (reason: string): RouteResult => ({ outcome: "skipped", reason, targets: [] });
+
 export const createApp = ({
   secret,
-  resolveSlack,
-  userMap = {},
+  store,
+  slack,
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   now = Date.now,
+  defer,
   logger = console,
 }: AppOptions): Server => {
+  const runLater =
+    defer ??
+    ((task: () => Promise<void>): void => {
+      setImmediate(() => {
+        task().catch((error: unknown) => logger.error(`Background task failed: ${errorMessage(error)}`));
+      });
+    });
+
+  const lookup: PersonLookup = (id) => {
+    const person = store.getPerson(id);
+    return person ? { slackUserId: person.slackUserId, name: person.name } : null;
+  };
+
+  const decide = (result: IssueNotice | Ignored): Promise<RouteResult> | RouteResult => {
+    if (result.kind === "ignored") return skipped(result.reason);
+    const text = renderNotice(result, planMentions(result, lookup));
+    if (!text) return skipped("assignee-not-resolvable");
+    // Linear sends create and then an assignee update for an issue created already assigned: one notice is enough.
+    const assigneeId = result.assignee?.id;
+    if (result.kind === "assigned" && result.issueId && assigneeId && store.hasNotifiedCreate(result.issueId, assigneeId)) {
+      return skipped("assigned-at-create");
+    }
+    return routeNotice(
+      { projectId: result.projectId, text },
+      { channelsFor: (projectId) => store.channelsFor(projectId), post: (channel, message) => slack.postMessage(channel, message) },
+    );
+  };
+
+  const processEvent = async (payload: unknown, deliveryId: string | null): Promise<void> => {
+    const result = classifyEvent(payload);
+    const notice = result.kind === "ignored" ? null : result;
+    const entry: EventEntry = {
+      deliveryId,
+      kind: notice ? notice.kind : "unclassified",
+      issueIdentifier: notice?.identifier ?? null,
+      issueTitle: notice?.title ?? null,
+      projectId: result.projectId,
+      issueId: notice?.issueId ?? null,
+      assigneeId: notice?.assignee?.id ?? null,
+      outcome: "failed",
+      reason: "in-flight",
+      targets: [],
+    };
+    // Claim the delivery before posting so a redelivery cannot post twice.
+    const id = store.beginEvent(entry);
+    if (id === null) {
+      logger.info(`Duplicate delivery ignored: ${deliveryId}`);
+      return;
+    }
+    let outcome: RouteResult;
+    try {
+      outcome = await decide(result);
+    } catch (error) {
+      logger.error(`Failed to process event: ${errorMessage(error)}`);
+      outcome = { outcome: "failed", reason: "internal-error", targets: [] };
+    }
+    store.finishEvent(id, outcome);
+    logger.info(`Event processed: kind=${entry.kind} outcome=${outcome.outcome}${outcome.reason ? ` reason=${outcome.reason}` : ""}`);
+  };
+
   const handleWebhook = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     let raw: Buffer;
     try {
@@ -46,8 +111,8 @@ export const createApp = ({
       return;
     }
 
-    const signature = req.headers["linear-signature"];
-    if (typeof signature !== "string" || !verifySignature(raw, signature, secret)) {
+    const signature = headerValue(req.headers["linear-signature"]);
+    if (signature === null || !verifySignature(raw, signature, secret)) {
       send(res, 401, { error: "invalid signature" });
       return;
     }
@@ -62,41 +127,9 @@ export const createApp = ({
       return;
     }
 
-    const lookup: PersonLookup = (id) =>
-      Object.hasOwn(userMap, id) ? { slackUserId: userMap[id] ?? null, name: null } : null;
-    const mapped = (id: string | null): string => (id && lookup(id)?.slackUserId ? "yes" : "no");
-    const result = classifyEvent(payload);
+    const deliveryId = headerValue(req.headers["linear-delivery"]);
     send(res, 200, { ok: true });
-
-    const isIssue = typeof payload === "object" && payload !== null && "type" in payload && payload.type === "Issue";
-    const action =
-      typeof payload === "object" && payload !== null && "action" in payload && typeof payload.action === "string"
-        ? payload.action
-        : "unknown";
-    const ignore = (reason: string): void => {
-      if (isIssue) logger.info(`Issue event ignored: action=${action} reason=${reason}`);
-    };
-    if (result.kind === "ignored") return ignore(result.reason);
-    const { projectId } = result;
-    const message = renderNotice(result, planMentions(result, lookup));
-    if (!message) return ignore("assignee not resolvable");
-    logger.info(
-      `Issue event: kind=${result.kind} actor=${result.actor.id ?? "none"} actor_mapped=${mapped(result.actor.id)}` +
-        ` assignee=${result.assignee?.id ?? "none"} assignee_mapped=${mapped(result.assignee?.id ?? null)}`,
-    );
-
-    const postToSlack = resolveSlack(projectId);
-    if (!postToSlack) {
-      logger.info(`Skipped Slack notification: project ${projectId ?? "none"} not mapped`);
-      return;
-    }
-
-    try {
-      await postToSlack(message);
-      logger.info("Slack notification sent");
-    } catch (error) {
-      logger.error(`Failed to post to Slack: ${errorMessage(error)}`);
-    }
+    runLater(() => processEvent(payload, deliveryId));
   };
 
   return createServer((req, res) => {
