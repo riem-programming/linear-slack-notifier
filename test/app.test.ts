@@ -468,7 +468,7 @@ test("a slash command returns an empty 200 before the background work runs", asy
     assert.equal(calls.length, 0);
     assert.equal(deferred(), 1);
     await settle();
-    assert.deepEqual(calls, [{ kind: "command", input: { text: "web", channelId: "C1", responseUrl: "https://hooks.slack.com/commands/x" } }]);
+    assert.deepEqual(calls, [{ kind: "command", input: { text: "web", channelId: "C1", command: "/estado-dev", responseUrl: "https://hooks.slack.com/commands/x" } }]);
   });
 });
 
@@ -500,5 +500,13 @@ test("slack routes answer 404 when the bot is not configured", async () => {
   await withApp(async ({ base }) => {
     assert.equal((await fetch(`${base}/slack/events`, { method: "POST", body: "{}" })).status, 404);
     assert.equal((await fetch(`${base}/slack/commands`, { method: "POST", body: "" })).status, 404);
+  });
+});
+
+test("prototype-like slack paths are 404", async () => {
+  await withSlackApp(async ({ base }) => {
+    for (const path of ["/toString", "/constructor", "/__proto__", "/slack/events/x"]) {
+      assert.equal((await slackPost(base, path, "{}")).status, 404);
+    }
   });
 });

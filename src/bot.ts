@@ -9,7 +9,7 @@ type Reply = { text: string; visibility: Visibility };
 
 export type Bot = {
   // Slash command: always answers through the Slack-issued response_url.
-  command: (input: { text: string; channelId: string; responseUrl: string }) => Promise<void>;
+  command: (input: { text: string; channelId: string; responseUrl: string; command?: string | undefined }) => Promise<void>;
   // app_mention: visible replies go to the channel (thread when given), help and errors only to the caller.
   mention: (input: { text: string; channel: string; user: string; threadTs?: string | undefined }) => Promise<void>;
 };
@@ -24,7 +24,19 @@ type BotOptions = {
 };
 
 // Removes every <@U...> mention token (with or without a label) and collapses whitespace.
-export const parseMention = (text: string): string => text.replace(/<@[UW][A-Z0-9]+(?:\|[^>]*)?>/g, " ").replace(/\s+/g, " ").trim();
+// Slack sends & < > as entities, so they are decoded (ampersand last) before matching project names.
+export const parseMention = (text: string): string =>
+  text
+    .replace(/<@[UW][A-Z0-9]+(?:\|[^>]*)?>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+
+const DEFAULT_COMMAND = "/estado";
+// The payload's command name is echoed in help text, so only a plain slash-command shape is trusted.
+const commandName = (value: string | undefined): string => (value && /^\/[a-z0-9_-]{1,32}$/i.test(value) ? value : DEFAULT_COMMAND);
 
 const list = (names: string[]): string => names.map((name) => `• ${escapeText(name)}`).join("\n");
 
@@ -35,7 +47,7 @@ export const createBot = ({ store, linear, slack, now, timeZone, logger }: BotOp
   };
 
   // Decision table (design D3): a named project or a linked channel is public; everything else is ephemeral.
-  const reply = async (argument: string, channelId: string): Promise<Reply> => {
+  const reply = async (argument: string, channelId: string, command: string): Promise<Reply> => {
     try {
       if (argument) {
         const all = await linear.listProjects();
@@ -48,7 +60,7 @@ export const createBot = ({ store, linear, slack, now, timeZone, logger }: BotOp
       const linked = store.projectsForChannel(channelId);
       if (linked.length > 0) return await summaries(linked.map((project) => project.id));
       const names = (await linear.listProjects()).map((project) => project.name);
-      return { text: `Este canal no tiene proyectos vinculados. Usá /estado <proyecto>.\nProyectos disponibles:\n${list(names)}`, visibility: "ephemeral" };
+      return { text: `Este canal no tiene proyectos vinculados. Usá ${command} <proyecto>.\nProyectos disponibles:\n${list(names)}`, visibility: "ephemeral" };
     } catch (error) {
       // The reply is generic on purpose; the detail (a fixed, secret-free client message) only goes to the log.
       logger.warn(`Status reply failed: ${error instanceof Error ? error.message : "unknown error"}`);
@@ -57,14 +69,14 @@ export const createBot = ({ store, linear, slack, now, timeZone, logger }: BotOp
   };
 
   return {
-    command: async ({ text, channelId, responseUrl }) => {
-      const { text: message, visibility } = await reply(text.trim(), channelId);
+    command: async ({ text, channelId, responseUrl, command }) => {
+      const { text: message, visibility } = await reply(text.trim(), channelId, commandName(command));
       await slack.respond(responseUrl, message, visibility);
     },
     mention: async ({ text, channel, user, threadTs }) => {
-      const { text: message, visibility } = await reply(parseMention(text), channel);
+      const { text: message, visibility } = await reply(parseMention(text), channel, DEFAULT_COMMAND);
       if (visibility === "in_channel") await slack.postMessage(channel, message, threadTs);
-      else await slack.postEphemeral(channel, user, message);
+      else await slack.postEphemeral(channel, user, message, threadTs);
     },
   };
 };

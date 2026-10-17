@@ -153,3 +153,17 @@ test("respond throws on a non-2xx answer", async () => {
   const { fetch } = fakeFetch(new Response("no", { status: 404 }));
   await assert.rejects(createSlackApi({ token: "t", fetch }).respond("https://hooks.slack.com/x", "x", "in_channel"), { message: "response_url responded with status 404" });
 });
+
+test("postEphemeral can reply in a thread", async () => {
+  const { fetch, calls } = fakeFetch(json({ ok: true }));
+  await createSlackApi({ token: "t", fetch }).postEphemeral("C1", "U1", "x", "1.1");
+  assert.equal(JSON.parse(calls[0]?.init.body as string).thread_ts, "1.1");
+});
+
+test("respond cancels the response body on a non-2xx answer", async () => {
+  let cancelled = false;
+  const body = new ReadableStream({ cancel: () => void (cancelled = true) });
+  const { fetch } = fakeFetch(new Response(body, { status: 500 }));
+  await assert.rejects(createSlackApi({ token: "t", fetch }).respond("https://hooks.slack.com/x", "x", "in_channel"));
+  assert.equal(cancelled, true);
+});

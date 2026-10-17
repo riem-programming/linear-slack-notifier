@@ -213,14 +213,19 @@ export const createApp = ({
     const body = await readSlack(req, res);
     if (body === null) return;
     const fields = parseForm(body);
-    const { text = "", channel_id: channelId, response_url: responseUrl } = fields;
+    const { text = "", channel_id: channelId, response_url: responseUrl, command } = fields;
     if (!channelId || !responseUrl) {
       send(res, 400, { error: "invalid command" });
       return;
     }
     send(res, 200);
-    safely("Command", () => current.command({ text, channelId, responseUrl }));
+    safely("Command", () => current.command({ text, channelId, responseUrl, command }));
   };
+
+  const slackRoutes = new Map([
+    ["/slack/events", handleSlackEvents],
+    ["/slack/commands", handleSlackCommand],
+  ]);
 
   const admin = createAdmin({ store, slack, linear, password: adminPassword, timeZone, logger });
 
@@ -241,7 +246,7 @@ export const createApp = ({
       });
       return;
     }
-    const slackRoute = req.method === "POST" && bot && slackSigningSecret ? { "/slack/events": handleSlackEvents, "/slack/commands": handleSlackCommand }[path] : undefined;
+    const slackRoute = req.method === "POST" && bot && slackSigningSecret ? slackRoutes.get(path) : undefined;
     if (slackRoute && bot) {
       slackRoute(req, res, bot).catch((error: unknown) => {
         logger.error(`Unhandled slack error: ${errorMessage(error)}`);

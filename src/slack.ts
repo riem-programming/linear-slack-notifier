@@ -6,7 +6,7 @@ export type SlackApi = {
   // Throws on ok:false (the Slack error code is the message); retries once on 429 when Retry-After <= 5s.
   postMessage: (channel: string, text: string, threadTs?: string) => Promise<void>;
   // Visible only to `user` in `channel`.
-  postEphemeral: (channel: string, user: string, text: string) => Promise<void>;
+  postEphemeral: (channel: string, user: string, text: string, threadTs?: string) => Promise<void>;
   // Replies through a Slack-issued response_url (https://hooks.slack.com only); needs no channel membership.
   respond: (responseUrl: string, text: string, visibility: "in_channel" | "ephemeral") => Promise<void>;
   // Cursor-paginated; public and private non-archived channels the bot token can see.
@@ -86,8 +86,8 @@ export const createSlackApi = ({
     postMessage: async (channel, text, threadTs) => {
       await send("chat.postMessage", JSON.stringify({ channel, text, ...(threadTs ? { thread_ts: threadTs } : {}), unfurl_links: false, unfurl_media: false }), json, true);
     },
-    postEphemeral: async (channel, user, text) => {
-      await send("chat.postEphemeral", JSON.stringify({ channel, user, text, unfurl_links: false, unfurl_media: false }), json, true);
+    postEphemeral: async (channel, user, text, threadTs) => {
+      await send("chat.postEphemeral", JSON.stringify({ channel, user, text, ...(threadTs ? { thread_ts: threadTs } : {}), unfurl_links: false, unfurl_media: false }), json, true);
     },
     respond: async (responseUrl, text, visibility) => {
       // SSRF guard: the URL comes from the request body, so only Slack's own host is allowed.
@@ -102,7 +102,10 @@ export const createSlackApi = ({
         redirect: "error",
         signal: AbortSignal.timeout(5000),
       });
-      if (!response.ok) throw new Error(`response_url responded with status ${response.status}`);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error(`response_url responded with status ${response.status}`);
+      }
     },
     listChannels,
     lookupUserByEmail: async (email) => {

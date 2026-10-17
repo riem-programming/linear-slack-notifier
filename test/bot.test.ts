@@ -8,6 +8,7 @@ import type { ProjectSnapshot } from "../src/linear.ts";
 const NOW = Date.parse("2026-10-17T17:00:00Z");
 const projects = [
   { id: "p1", name: "Web Kamailab" },
+  { id: "p4", name: "R&D" },
   { id: "p2", name: "App Móvil" },
   { id: "p3", name: "App Web" },
 ];
@@ -34,14 +35,14 @@ const setup = (options: { linearFails?: boolean; link?: string[] } = {}) => {
     },
     slack: {
       postMessage: async (channel, text, thread) => void out.push(`msg|${channel}|${thread ?? ""}|${text}`),
-      postEphemeral: async (channel, user, text) => void out.push(`eph|${channel}|${user}|${text}`),
+      postEphemeral: async (channel, user, text, thread) => void out.push(`eph|${channel}|${user}|${thread ?? ""}|${text}`),
       respond: async (_url, text, visibility) => void out.push(`${visibility}|${text}`),
     },
     now: () => NOW, timeZone: "America/Lima", logger: { warn: (line: string) => void logs.push(line) },
   });
   return { bot, out, logs };
 };
-const cmd = (text: string, channelId = "C1") => ({ text, channelId, responseUrl: "https://hooks.slack.com/commands/x" });
+const cmd = (text: string, channelId = "C1", command?: string) => ({ text, channelId, command, responseUrl: "https://hooks.slack.com/commands/x" });
 
 test("a named project answers in_channel, even in an unlinked channel", async () => {
   const { bot, out } = setup();
@@ -60,7 +61,7 @@ test("no argument in an unlinked channel returns ephemeral help with the project
   const { bot, out } = setup();
   await bot.command(cmd("  "));
   assert.match(out[0] as string, /^ephemeral\|Este canal no tiene proyectos vinculados\. Usá \/estado <proyecto>\./);
-  for (const p of projects) assert.ok((out[0] as string).includes(p.name));
+  for (const p of projects) assert.ok((out[0] as string).includes(p.name.replace("&", "&amp;")));
 });
 
 test("unknown project replies ephemeral with the available projects", async () => {
@@ -112,8 +113,33 @@ test("a mention in a linked channel posts the linked projects", async () => {
 test("help and errors after a mention go through postEphemeral to the caller", async () => {
   const unlinked = setup();
   await unlinked.bot.mention({ text: "<@UBOT>", channel: "C2", user: "U7" });
-  assert.match(unlinked.out[0] as string, /^eph\|C2\|U7\|Este canal no tiene proyectos vinculados/);
+  assert.match(unlinked.out[0] as string, /^eph\|C2\|U7\|\|Este canal no tiene proyectos vinculados/);
   const broken = setup({ linearFails: true });
   await broken.bot.mention({ text: "<@UBOT> web", channel: "C1", user: "U7" });
-  assert.match(broken.out[0] as string, /^eph\|C1\|U7\|No pude consultar Linear/);
+  assert.match(broken.out[0] as string, /^eph\|C1\|U7\|\|No pude consultar Linear/);
+});
+
+test("a mention decodes Slack entities before matching and does not double-escape", async () => {
+  assert.equal(parseMention("<@UBOT> r&amp;d &lt;x&gt;"), "r&d <x>");
+  const { bot, out } = setup();
+  await bot.mention({ text: "<@UBOT> r&amp;d", channel: "C1", user: "U1" });
+  assert.match(out[0] as string, /^msg\|C1\|\|📊 Estado de \*R&amp;D\*/);
+});
+
+test("an ephemeral reply to a mention inside a thread keeps the thread", async () => {
+  const { bot, out } = setup();
+  await bot.mention({ text: "<@UBOT>", channel: "C2", user: "U7", threadTs: "3.3" });
+  assert.match(out[0] as string, /^eph\|C2\|U7\|3\.3\|Este canal/);
+});
+
+test("help names the slash command that was used, falling back to /estado", async () => {
+  const dev = setup();
+  await dev.bot.command(cmd("", "C2", "/estado-dev"));
+  assert.ok((dev.out[0] as string).includes("Usá /estado-dev <proyecto>."));
+  const odd = setup();
+  await odd.bot.command(cmd("", "C2", "/x <!channel>"));
+  assert.ok((odd.out[0] as string).includes("Usá /estado <proyecto>."));
+  const mention = setup();
+  await mention.bot.mention({ text: "<@UBOT>", channel: "C2", user: "U1" });
+  assert.ok((mention.out[0] as string).includes("Usá /estado <proyecto>."));
 });
