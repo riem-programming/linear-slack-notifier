@@ -1,3 +1,7 @@
+import { memo } from "./memo.ts";
+import type { SlackMember } from "./members.ts";
+import { foldText } from "./text.ts";
+
 const SLACK_API = "https://slack.com/api";
 const MAX_RETRY_AFTER_SECONDS = 5;
 const DEFAULT_BACKOFF_SECONDS = 1;
@@ -13,6 +17,9 @@ export type SlackApi = {
   listChannels: () => Promise<SlackChannel[]>;
   // Returns the member id for an email, or null when Slack has no such user (users_not_found).
   lookupUserByEmail: (email: string) => Promise<string | null>;
+  // Human workspace members (no bots, app users, deleted accounts or USLACKBOT), sorted by name.
+  // Cached for 10 minutes; a failed refresh serves the last good list with a warning when there is one.
+  listMembers: () => Promise<SlackMember[]>;
 };
 
 export type SlackChannel = { id: string; name: string; isMember: boolean };
@@ -22,21 +29,38 @@ type SlackResult = {
   error?: string;
   user?: { id?: string };
   channels?: { id: string; name: string; is_member?: boolean }[];
+  members?: SlackUser[];
   response_metadata?: { next_cursor?: string };
 };
 
+type SlackUser = {
+  id?: string;
+  name?: string;
+  real_name?: string;
+  deleted?: boolean;
+  is_bot?: boolean;
+  is_app_user?: boolean;
+  profile?: { display_name?: string; email?: string };
+};
+
 const MAX_CHANNEL_PAGES = 20;
+const MAX_MEMBER_PAGES = 20;
+const MEMBERS_TTL_MS = 10 * 60_000;
 
 type SlackApiOptions = {
   token: string;
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  logger?: Pick<Console, "warn">;
 };
 
 export const createSlackApi = ({
   token,
   fetch: fetchImpl = globalThis.fetch,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now = Date.now,
+  logger = console,
 }: SlackApiOptions): SlackApi => {
   const call = (method: string, body: string, contentType: string): Promise<Response> =>
     fetchImpl(`${SLACK_API}/${method}`, {
@@ -81,6 +105,49 @@ export const createSlackApi = ({
     return channels;
   };
 
+  const toMember = (user: SlackUser): SlackMember | null => {
+    if (!user.id || user.deleted || user.is_bot || user.is_app_user || user.id === "USLACKBOT") return null;
+    const handle = user.name ?? "";
+    return {
+      id: user.id,
+      name: user.real_name || user.profile?.display_name || handle || user.id,
+      handle,
+      email: user.profile?.email || null,
+    };
+  };
+
+  const loadMembers = async (): Promise<SlackMember[]> => {
+    const members: SlackMember[] = [];
+    let cursor = "";
+    for (let pageNumber = 0; pageNumber < MAX_MEMBER_PAGES; pageNumber += 1) {
+      const params = new URLSearchParams({ limit: "200" });
+      if (cursor) params.set("cursor", cursor);
+      const result = await send("users.list", params.toString(), "application/x-www-form-urlencoded", true);
+      for (const user of result.members ?? []) {
+        const member = toMember(user);
+        if (member) members.push(member);
+      }
+      cursor = result.response_metadata?.next_cursor ?? "";
+      if (!cursor) break;
+    }
+    return members.sort((a, b) => foldText(a.name).localeCompare(foldText(b.name)));
+  };
+
+  let lastGood: SlackMember[] | null = null;
+  const cachedMembers = memo(
+    async () => (lastGood = await loadMembers()),
+    { ttl: MEMBERS_TTL_MS, now },
+  );
+  const listMembers = async (): Promise<SlackMember[]> => {
+    try {
+      return await cachedMembers();
+    } catch (error) {
+      if (!lastGood) throw error;
+      logger.warn("Slack members refresh failed; serving the previous list");
+      return lastGood;
+    }
+  };
+
   const json = "application/json; charset=utf-8";
   return {
     postMessage: async (channel, text, threadTs) => {
@@ -108,6 +175,7 @@ export const createSlackApi = ({
       }
     },
     listChannels,
+    listMembers,
     lookupUserByEmail: async (email) => {
       try {
         const result = await send("users.lookupByEmail", new URLSearchParams({ email }).toString(), "application/x-www-form-urlencoded", true);

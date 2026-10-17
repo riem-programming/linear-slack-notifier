@@ -167,3 +167,84 @@ test("respond cancels the response body on a non-2xx answer", async () => {
   await assert.rejects(createSlackApi({ token: "t", fetch }).respond("https://hooks.slack.com/x", "x", "in_channel"));
   assert.equal(cancelled, true);
 });
+
+const user = (id: string, extra: Record<string, unknown> = {}) => ({ id, name: `h${id}`, real_name: `Real ${id}`, profile: { display_name: "", email: `${id}@x.io` }, ...extra });
+
+test("listMembers maps users, excludes deleted, bots, app users and USLACKBOT, and sorts by folded name", async () => {
+  const { fetch, calls } = fakeFetch(
+    json({
+      ok: true,
+      members: [
+        user("U3", { real_name: "Zoe" }),
+        user("U1", { real_name: "Álvaro" }),
+        user("U2", { deleted: true }),
+        user("B1", { is_bot: true }),
+        user("A1", { is_app_user: true }),
+        user("USLACKBOT", { name: "slackbot" }),
+        user("U4", { real_name: "", profile: { display_name: "Beto" } }),
+        user("U5", { real_name: "", profile: {} }),
+      ],
+      response_metadata: { next_cursor: "" },
+    }),
+  );
+  const members = await createSlackApi({ token: "xoxb-t", fetch }).listMembers();
+  assert.deepEqual(members.map((x) => x.id), ["U1", "U4", "U5", "U3"]);
+  assert.deepEqual(members[0], { id: "U1", name: "Álvaro", handle: "hU1", email: "U1@x.io" });
+  assert.equal(members[1]?.name, "Beto");
+  assert.equal(members[2]?.name, "hU5");
+  assert.equal(members[2]?.email, null);
+  assert.equal(calls[0]?.url, "https://slack.com/api/users.list");
+  assert.equal(new URLSearchParams(calls[0]?.init.body as string).get("limit"), "200");
+});
+
+test("listMembers follows cursors and stops at the page cap", async () => {
+  const pages = Array.from({ length: 25 }, (_, i) => json({ ok: true, members: [user(`U${i}`)], response_metadata: { next_cursor: `c${i}` } }));
+  const { fetch, calls } = fakeFetch(...pages);
+  const members = await createSlackApi({ token: "t", fetch }).listMembers();
+  assert.equal(calls.length, 20);
+  assert.equal(members.length, 20);
+  assert.equal(new URLSearchParams(calls[1]?.init.body as string).get("cursor"), "c0");
+});
+
+test("listMembers caches for 10 minutes and shares one in-flight request", async () => {
+  let t = 0;
+  const { fetch, calls } = fakeFetch(json({ ok: true, members: [user("U1")] }), json({ ok: true, members: [user("U2")] }));
+  const api = createSlackApi({ token: "t", fetch, now: () => t });
+  const [a, b] = await Promise.all([api.listMembers(), api.listMembers()]);
+  assert.equal(a, b);
+  t = 10 * 60_000;
+  assert.equal((await api.listMembers())[0]?.id, "U1");
+  t += 1;
+  assert.equal((await api.listMembers())[0]?.id, "U2");
+  assert.equal(calls.length, 2);
+});
+
+test("listMembers retries once on a short 429", async () => {
+  const { fetch, calls } = fakeFetch(json({ ok: false }, { status: 429, headers: { "retry-after": "1" } }), json({ ok: true, members: [user("U1")] }));
+  const members = await createSlackApi({ token: "t", fetch, sleep: async () => {} }).listMembers();
+  assert.equal(members.length, 1);
+  assert.equal(calls.length, 2);
+});
+
+test("listMembers throws a fixed error on ok:false, replays it for 30s and never leaks the token", async () => {
+  let t = 0;
+  const { fetch, calls } = fakeFetch(json({ ok: false, error: "missing_scope" }), json({ ok: true, members: [user("U1")] }));
+  const api = createSlackApi({ token: "xoxb-secret", fetch, now: () => t });
+  await assert.rejects(api.listMembers(), (error: Error) => error.message === "missing_scope" && !error.message.includes("xoxb-secret"));
+  await assert.rejects(api.listMembers(), { message: "missing_scope" });
+  assert.equal(calls.length, 1);
+  t = 30_001;
+  assert.equal((await api.listMembers()).length, 1);
+});
+
+test("listMembers serves the stale list with a warning when a refresh fails", async () => {
+  let t = 0;
+  const warnings: string[] = [];
+  const { fetch } = fakeFetch(json({ ok: true, members: [user("U1")] }), json({ ok: false, error: "ratelimited" }));
+  const api = createSlackApi({ token: "t", fetch, now: () => t, logger: { warn: (m: string) => void warnings.push(m) } });
+  await api.listMembers();
+  t = 10 * 60_000 + 1;
+  assert.equal((await api.listMembers())[0]?.id, "U1");
+  assert.equal(warnings.length, 1);
+  assert.ok(!warnings[0]?.includes("secret"));
+});
