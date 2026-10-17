@@ -127,9 +127,9 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(admin): redesign Estado screen with search, counters and day groups`
 - Linear ticket: "Admin: nueva pantalla Estado" - Eventos agrupados por día con búsqueda, contadores, enlace al issue y personas mencionadas, y selector Avisos / Todos los eventos.
 - Files: `src/admin-status.ts`, `src/admin.ts`, `src/public/admin.css`, `test/admin-status.test.ts`, `test/admin.test.ts`.
-- [ ] 3b.1 RED: `countOutcomes` (sums to rows shown, zeros when empty); `groupByDay` across midnight in `America/Lima`, "Hoy"/"Ayer"/`es` label, order kept.
-- [ ] 3b.2 RED: page: "Avisos" (default) hides `unclassified`, "Todos los eventos" (`?all=1`) includes them, both at most 50 rows; `?q=` search capped at 100 chars, honors segment; identifier links only for http/https; mentions listed; legacy row renders; hostile text escaped; tú copy.
-- [ ] 3b.3 GREEN: `admin-status.ts` handler and renderer; wire in `admin.ts`; CSS additions.
+- [x] 3b.1 RED: `countOutcomes` (sums to rows shown, zeros when empty); `groupByDay` across midnight in `America/Lima`, "Hoy"/"Ayer"/`es` label, order kept.
+- [x] 3b.2 RED: page: "Avisos" (default) hides `unclassified`, "Todos los eventos" (`?all=1`) includes them, both at most 50 rows; `?q=` search capped at 100 chars, honors segment; identifier links only for http/https; mentions listed; legacy row renders; hostile text escaped; tú copy.
+- [x] 3b.3 GREEN: `admin-status.ts` handler and renderer; wire in `admin.ts`; CSS additions.
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: day headers (Hoy/Ayer); toggle Avisos and Todos los eventos (more rows with Todos, max 50); counters match visible rows and are labeled; search "gestion" finds "Gestión"; search for an old event not in the latest 50; new events show issue link and mentions; old events show neither; times in `STATUS_TIME_ZONE`.
 - USER prerequisites: trigger at least one new Linear event after 3a is deployed to see link and mentions.
