@@ -49,7 +49,7 @@ On successful login the system SHALL issue a cookie named `nh_session` whose val
 
 ### Requirement: Password change revokes sessions
 
-The session payload MUST carry a password binding derived as `HMAC(SESSION_SECRET, ADMIN_PASSWORD)` truncated to 16 bytes (hex or equivalent). A session whose binding does not match the current `ADMIN_PASSWORD` MUST be rejected.
+The session payload MUST carry a password binding derived as `HMAC(SESSION_SECRET, "pw:" + ADMIN_PASSWORD)` truncated to 16 bytes (hex or equivalent). A session whose binding does not match the current `ADMIN_PASSWORD` MUST be rejected.
 
 #### Scenario: Password rotated
 - GIVEN a valid session issued under the old `ADMIN_PASSWORD`
@@ -58,7 +58,7 @@ The session payload MUST carry a password binding derived as `HMAC(SESSION_SECRE
 
 ### Requirement: Separate session secret and fail-closed
 
-`SESSION_SECRET` MUST be a dedicated env var of at least 32 bytes and MUST NOT be derived from `ADMIN_PASSWORD`. If `SESSION_SECRET` is unset or shorter than 32 bytes, or `ADMIN_PASSWORD` is unset, all admin routes (including login) MUST respond 403 and a warning MUST be logged without revealing secret values. The service MUST still boot and `/health` and the webhook/Slack routes MUST keep working.
+`SESSION_SECRET` MUST be a dedicated env var of at least 32 bytes and MUST NOT be derived from `ADMIN_PASSWORD`. If `SESSION_SECRET` is unset or shorter than 32 bytes after trimming surrounding whitespace, or `ADMIN_PASSWORD` is unset, all admin routes (including login) MUST respond 403 and a warning MUST be logged without revealing secret values. The service MUST still boot and `/health` and the webhook/Slack routes MUST keep working.
 
 #### Scenario: Missing secret
 - GIVEN `SESSION_SECRET` is not configured
@@ -153,7 +153,7 @@ The system MUST count failed logins in memory and return HTTP 429 with the messa
 
 ### Requirement: Session-bound CSRF
 
-Every state-changing admin POST MUST pass an `Origin` check (same origin as the service) and MUST carry a CSRF token equal to `HMAC(SESSION_SECRET, "csrf:" + iat)` of the current session. The login POST MUST pass the `Origin` check. A missing or mismatching token, or a foreign `Origin`, MUST be rejected with 403 and no state change. The token MUST remain valid across process restarts while the session is valid.
+Every state-changing admin POST MUST pass an `Origin` check (same origin as the service) and MUST carry a CSRF token equal to `HMAC(SESSION_SECRET, "csrf:" + iat + ":" + exp + ":" + pf)` of the current session (bound to the whole session, so two sessions never share a token). The login POST MUST pass the `Origin` check. A missing or mismatching token, or a foreign `Origin`, MUST be rejected with 403 and no state change. The token MUST remain valid across process restarts while the session is valid.
 
 #### Scenario: Valid token
 - GIVEN an authenticated admin submitting a form with the token rendered in it
