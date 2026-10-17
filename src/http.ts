@@ -62,3 +62,7 @@ export const parseJson = (raw: string): unknown => {
 
 export const parseForm = (raw: string): Record<string, string> =>
   Object.fromEntries(new URLSearchParams(raw));
+
+// Node types repeated headers as string[]; only a single non-empty value is trusted.
+export const headerValue = (value: string | string[] | undefined): string | null =>
+  typeof value === "string" && value.length > 0 ? value : null;

@@ -2,9 +2,12 @@ import { createApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import type { Config } from "./config.ts";
 import { backup, openDb, pruneEventLog } from "./db.ts";
+import { createSlackApi } from "./slack.ts";
+import { createStore } from "./store.ts";
 import type { DatabaseSync } from "node:sqlite";
 
 const DAY_MS = 86_400_000;
+const STALE_IN_FLIGHT_MS = 5 * 60_000;
 
 const readConfig = (): Config => {
   try {
@@ -42,10 +45,13 @@ const start = (): void => {
   const config = readConfig();
   const db = openDatabase(config.databasePath);
   startMaintenance(db, config);
-  // Notification routing moves to the database in a later slice; until then no channel is mapped.
+  const store = createStore(db);
+  // Rows still in flight from a previous run were cut short; label them so the Status screen is honest.
+  store.sweepInterrupted(STALE_IN_FLIGHT_MS);
   const server = createApp({
     secret: config.linearWebhookSecret,
-    resolveSlack: () => null,
+    store,
+    slack: createSlackApi({ token: config.slackBotToken }),
   });
 
   server.listen(config.port, () => {

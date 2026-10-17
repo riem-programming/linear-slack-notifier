@@ -4,21 +4,44 @@ import { request } from "node:http";
 import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.ts";
-import type { PostToSlack } from "../src/slack.ts";
+import { openDb } from "../src/db.ts";
+import { createStore } from "../src/store.ts";
+import type { Store } from "../src/store.ts";
 
 const secret = "s3cret";
-const silent = { info: () => {}, error: () => {} };
+const silent = { info: () => {}, warn: () => {}, error: () => {} };
+type Logger = { info: (line: string) => void; warn: (line: string) => void; error: (line: string) => void };
+
+type Harness = { base: string; store: Store; sent: string[]; settle: () => Promise<void> };
 
 const withApp = async (
-  postToSlack: PostToSlack,
-  run: (base: string) => Promise<void>,
-  logger: { info: (line: string) => void; error: (line: string) => void } = silent,
+  run: (h: Harness) => Promise<void>,
+  options: { failChannels?: string[]; logger?: Logger; wrapStore?: (store: Store) => Store } = {},
 ): Promise<void> => {
-  const resolveSlack = (projectId: string | null): PostToSlack | null => (projectId === "proj-1" ? postToSlack : null);
-  const server = createApp({ secret, resolveSlack, maxBodyBytes: 2_000, now: () => 1_000_000, logger });
+  const store = createStore(openDb(":memory:"));
+  store.upsertProject({ id: "proj-1", name: "Web" });
+  store.upsertChannel({ id: "C1", name: "general", isMember: true });
+  store.link("C1", "proj-1");
+  const sent: string[] = [];
+  const slack = {
+    postMessage: async (channel: string, text: string): Promise<void> => {
+      if (options.failChannels?.includes(channel)) throw new Error("not_in_channel");
+      sent.push(`${channel}|${text}`);
+    },
+  };
+  const pending: (() => Promise<void>)[] = [];
+  const server = createApp({
+    secret, store: options.wrapStore?.(store) ?? store, slack, maxBodyBytes: 2_000, now: () => 1_000_000, logger: options.logger ?? silent,
+    defer: (task) => void pending.push(task),
+  });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   try {
-    await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    await run({
+      base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, store, sent,
+      settle: async () => {
+        for (let task = pending.shift(); task; task = pending.shift()) await task();
+      },
+    });
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
@@ -28,20 +51,45 @@ const withApp = async (
 const payload = (webhookTimestamp: number, projectId: string | null = "proj-1"): string =>
   JSON.stringify({
     action: "create", type: "Issue", actor: { name: "Ana" }, webhookTimestamp,
-    data: { identifier: "K-1", title: "T", url: "https://l/K-1", state: { name: "Todo", type: "unstarted" }, projectId },
+    data: { id: "iss-1", identifier: "K-1", title: "T", url: "https://l/K-1", state: { name: "Todo", type: "unstarted" }, projectId },
   });
 
-const post = (base: string, body: string, signature?: string): Promise<Response> =>
-  fetch(`${base}/webhooks/linear`, {
-    method: "POST",
-    headers: signature ? { "linear-signature": signature } : {},
-    body,
+type Assignee = { id: string; name?: string };
+
+const createdBody = (assignee: Assignee): string =>
+  JSON.stringify({
+    action: "create", type: "Issue", actor: { name: "Ana" }, webhookTimestamp: 1_000_000,
+    data: { id: "iss-1", identifier: "K-1", title: "T", url: "https://l/K-1", projectId: "proj-1", assignee: { name: "Beto", ...assignee } },
+  });
+
+const assignedBody = (assignee: Assignee): string =>
+  JSON.stringify({
+    action: "update", type: "Issue", actor: { name: "Ana" }, webhookTimestamp: 1_000_000, updatedFrom: { assigneeId: null },
+    data: {
+      id: "iss-1", identifier: "K-1", title: "T", url: "https://l/K-1", projectId: "proj-1", assigneeId: assignee.id,
+      ...(assignee.name ? { assignee } : {}),
+    },
   });
 
 const sign = (body: string): string => createHmac("sha256", secret).update(body).digest("hex");
 
+const post = (base: string, body: string, signature?: string, deliveryId?: string): Promise<Response> =>
+  fetch(`${base}/webhooks/linear`, {
+    method: "POST",
+    headers: {
+      ...(signature ? { "linear-signature": signature } : {}),
+      ...(deliveryId ? { "linear-delivery": deliveryId } : {}),
+    },
+    body,
+  });
+
+const deliver = async (h: Harness, body: string, deliveryId?: string): Promise<void> => {
+  assert.equal((await post(h.base, body, sign(body), deliveryId)).status, 200);
+  await h.settle();
+};
+
 test("GET /health returns ok", async () => {
-  await withApp(async () => {}, async (base) => {
+  await withApp(async ({ base }) => {
     const res = await fetch(`${base}/health`);
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), { status: "ok" });
@@ -49,104 +97,188 @@ test("GET /health returns ok", async () => {
 });
 
 test("unknown route returns 404", async () => {
-  await withApp(async () => {}, async (base) => {
+  await withApp(async ({ base }) => {
     assert.equal((await fetch(`${base}/nope`)).status, 404);
   });
 });
 
-test("valid signed webhook posts to Slack", async () => {
-  const sent: string[] = [];
-  await withApp(async (t) => { sent.push(t); }, async (base) => {
+test("valid signed webhook posts to the linked channel and logs one notified row", async () => {
+  await withApp(async (h) => {
+    await deliver(h, payload(1_000_000), "d-1");
+    assert.deepEqual(h.sent, ["C1|Ana creó <https://l/K-1|K-1>: T"]);
+    const rows = h.store.recentEvents();
+    assert.equal(rows.length, 1);
+    assert.deepEqual(
+      { ...rows[0], id: 0, receivedAt: "" },
+      {
+        id: 0, receivedAt: "", deliveryId: "d-1", kind: "created", issueIdentifier: "K-1", issueTitle: "T",
+        projectId: "proj-1", issueId: "iss-1", assigneeId: null, outcome: "notified", reason: null,
+        targets: [{ channel: "C1", outcome: "notified" }],
+      },
+    );
+  });
+});
+
+test("the webhook is acknowledged before background delivery completes", async () => {
+  await withApp(async (h) => {
     const body = payload(1_000_000);
-    assert.equal((await post(base, body, sign(body))).status, 200);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal((await post(h.base, body, sign(body), "d-1")).status, 200);
+    assert.equal(h.store.recentEvents().length, 0);
+    await h.settle();
+    assert.equal(h.store.recentEvents().length, 1);
   });
-  assert.deepEqual(sent, ["Ana creó <https://l/K-1|K-1>: T"]);
 });
 
-test("mapped project posts through its own client", async () => {
-  const sentA: string[] = [];
-  const sentB: string[] = [];
-  const clients: Record<string, PostToSlack> = {
-    "proj-a": async (t) => { sentA.push(t); },
-    "proj-b": async (t) => { sentB.push(t); },
-  };
-  const server = createApp({
-    secret, resolveSlack: (id) => (id ? clients[id] : undefined) ?? null, now: () => 1_000_000, logger: silent,
+test("a project linked to two channels posts to both and records each target", async () => {
+  await withApp(async (h) => {
+    h.store.upsertChannel({ id: "C2", name: "dev", isMember: true });
+    h.store.link("C2", "proj-1");
+    await deliver(h, payload(1_000_000), "d-1");
+    assert.equal(h.sent.length, 2);
+    assert.deepEqual(h.store.recentEvents()[0]?.targets.map((t) => t.channel), ["C2", "C1"]);
   });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  try {
-    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const body = payload(1_000_000, "proj-b");
-    assert.equal((await post(base, body, sign(body))).status, 200);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  } finally {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
-  }
-  assert.deepEqual(sentA, []);
-  assert.deepEqual(sentB, ["Ana creó <https://l/K-1|K-1>: T"]);
 });
 
-test("unmapped project sends nothing and logs a skip line", async () => {
-  const sent: string[] = [];
-  const infos: string[] = [];
-  await withApp(async (t) => { sent.push(t); }, async (base) => {
-    const body = payload(1_000_000, "proj-other");
-    assert.equal((await post(base, body, sign(body))).status, 200);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }, { info: (l) => infos.push(l), error: () => {} });
-  assert.deepEqual(sent, []);
-  assert.ok(infos.includes("Skipped Slack notification: project proj-other not mapped"));
+test("one failing channel is logged as failed with its error while the other still receives the notice", async () => {
+  await withApp(async (h) => {
+    h.store.upsertChannel({ id: "C2", name: "dev", isMember: false });
+    h.store.link("C2", "proj-1");
+    await deliver(h, payload(1_000_000), "d-1");
+    assert.deepEqual(h.sent, ["C1|Ana creó <https://l/K-1|K-1>: T"]);
+    const [row] = h.store.recentEvents();
+    assert.equal(row?.outcome, "failed");
+    assert.equal(row?.reason, "post-failed");
+    assert.deepEqual(row?.targets, [
+      { channel: "C2", outcome: "failed", error: "not_in_channel" },
+      { channel: "C1", outcome: "notified" },
+    ]);
+  }, { failChannels: ["C2"] });
 });
 
-test("missing projectId sends nothing and logs a skip line", async () => {
-  const sent: string[] = [];
-  const infos: string[] = [];
-  await withApp(async (t) => { sent.push(t); }, async (base) => {
-    const body = payload(1_000_000, null);
-    assert.equal((await post(base, body, sign(body))).status, 200);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }, { info: (l) => infos.push(l), error: () => {} });
-  assert.deepEqual(sent, []);
-  assert.ok(infos.includes("Skipped Slack notification: project none not mapped"));
+test("an issue without a project is logged as skipped no-project", async () => {
+  await withApp(async (h) => {
+    await deliver(h, payload(1_000_000, null), "d-1");
+    assert.deepEqual(h.sent, []);
+    assert.equal(h.store.recentEvents()[0]?.outcome, "skipped");
+    assert.equal(h.store.recentEvents()[0]?.reason, "no-project");
+  });
 });
 
-test("bad or missing signature returns 401 and sends nothing", async () => {
-  const sent: string[] = [];
-  await withApp(async (t) => { sent.push(t); }, async (base) => {
+test("an unlinked project is logged as skipped project-not-linked", async () => {
+  await withApp(async (h) => {
+    await deliver(h, payload(1_000_000, "proj-other"), "d-1");
+    assert.deepEqual(h.sent, []);
+    assert.equal(h.store.recentEvents()[0]?.reason, "project-not-linked");
+    assert.equal(h.store.recentEvents()[0]?.projectId, "proj-other");
+  });
+});
+
+test("a redelivery with the same Linear-Delivery id is not posted twice and not logged twice", async () => {
+  await withApp(async (h) => {
+    await deliver(h, payload(1_000_000), "d-1");
+    await deliver(h, payload(1_000_000), "d-1");
+    assert.equal(h.sent.length, 1);
+    assert.equal(h.store.recentEvents().length, 1);
+    await deliver(h, payload(1_000_000), "d-2");
+    assert.equal(h.sent.length, 2);
+  });
+});
+
+test("events without a delivery id are still processed", async () => {
+  await withApp(async (h) => {
+    await deliver(h, payload(1_000_000));
+    assert.equal(h.sent.length, 1);
+    assert.equal(h.store.recentEvents()[0]?.deliveryId, null);
+  });
+});
+
+test("an unrecognized event is logged as unclassified and skipped with a reason", async () => {
+  await withApp(async (h) => {
+    await deliver(h, JSON.stringify({ type: "Comment", webhookTimestamp: 1_000_000 }), "d-1");
+    assert.deepEqual(h.sent, []);
+    const [row] = h.store.recentEvents();
+    assert.equal(row?.kind, "unclassified");
+    assert.equal(row?.outcome, "skipped");
+    assert.equal(row?.reason, "not a notifiable event");
+  });
+});
+
+test("an assigned update whose assignee cannot be written is skipped as assignee-not-resolvable", async () => {
+  await withApp(async (h) => {
+    await deliver(h, assignedBody({ id: "ghost" }), "d-1");
+    assert.deepEqual(h.sent, []);
+    assert.equal(h.store.recentEvents()[0]?.kind, "assigned");
+    assert.equal(h.store.recentEvents()[0]?.reason, "assignee-not-resolvable");
+  });
+});
+
+test("mentions come from the people stored in SQLite", async () => {
+  await withApp(async (h) => {
+    h.store.upsertPerson({ linearUserId: "u-beto", name: "Beto", email: null, slackUserId: "UBETO", matchSource: "manual" });
+    await deliver(h, createdBody({ id: "u-beto" }), "d-1");
+    assert.deepEqual(h.sent, ["C1|Ana creó <https://l/K-1|K-1>: T y se lo asignó a <@UBETO>"]);
+    assert.equal(h.store.recentEvents()[0]?.assigneeId, "u-beto");
+  });
+});
+
+test("an assigned notice right after a notified created notice for the same assignee is suppressed", async () => {
+  await withApp(async (h) => {
+    await deliver(h, createdBody({ id: "u-beto" }), "d-1");
+    await deliver(h, assignedBody({ id: "u-beto", name: "Beto" }), "d-2");
+    assert.equal(h.sent.length, 1);
+    const [assigned] = h.store.recentEvents();
+    assert.equal(assigned?.kind, "assigned");
+    assert.equal(assigned?.outcome, "skipped");
+    assert.equal(assigned?.reason, "assigned-at-create");
+  });
+});
+
+test("an assigned notice for a different assignee, or without a prior created notice, still notifies", async () => {
+  await withApp(async (h) => {
+    await deliver(h, createdBody({ id: "u-beto" }), "d-1");
+    await deliver(h, assignedBody({ id: "u-carla", name: "Carla" }), "d-2");
+    assert.equal(h.sent.length, 2);
+    assert.equal(h.store.recentEvents()[0]?.outcome, "notified");
+  });
+  await withApp(async (h) => {
+    await deliver(h, assignedBody({ id: "u-beto", name: "Beto" }), "d-1");
+    assert.equal(h.sent.length, 1);
+  });
+});
+
+test("bad or missing signature returns 401, posts nothing and stores no row", async () => {
+  await withApp(async (h) => {
     const body = payload(1_000_000);
-    assert.equal((await post(base, body, "00".repeat(32))).status, 401);
-    assert.equal((await post(base, body)).status, 401);
+    assert.equal((await post(h.base, body, "00".repeat(32), "d-1")).status, 401);
+    assert.equal((await post(h.base, body, undefined, "d-1")).status, 401);
+    await h.settle();
+    assert.deepEqual(h.sent, []);
+    assert.equal(h.store.recentEvents().length, 0);
   });
-  assert.deepEqual(sent, []);
 });
 
-test("stale timestamp returns 401", async () => {
-  await withApp(async () => {}, async (base) => {
+test("stale timestamp returns 401 and stores no row", async () => {
+  await withApp(async (h) => {
     const body = payload(1_000_000 - 61_000);
-    assert.equal((await post(base, body, sign(body))).status, 401);
+    assert.equal((await post(h.base, body, sign(body), "d-1")).status, 401);
+    assert.equal(h.store.recentEvents().length, 0);
   });
 });
 
-test("Slack failure still returns 200", async () => {
-  await withApp(async () => { throw new Error("boom"); }, async (base) => {
+test("a Slack failure still returns 200 and stored rows hold no secrets or signature", async () => {
+  await withApp(async (h) => {
     const body = payload(1_000_000);
-    assert.equal((await post(base, body, sign(body))).status, 200);
-  });
-});
-
-test("ignored event returns 200 without Slack call", async () => {
-  const sent: string[] = [];
-  await withApp(async (t) => { sent.push(t); }, async (base) => {
-    const body = JSON.stringify({ type: "Comment", webhookTimestamp: 1_000_000 });
-    assert.equal((await post(base, body, sign(body))).status, 200);
-  });
-  assert.deepEqual(sent, []);
+    const signature = sign(body);
+    assert.equal((await post(h.base, body, signature, "d-1")).status, 200);
+    await h.settle();
+    const dump = JSON.stringify(h.store.recentEvents());
+    assert.ok(!dump.includes(secret) && !dump.includes(signature));
+    assert.equal(h.store.recentEvents()[0]?.outcome, "failed");
+  }, { failChannels: ["C1"] });
 });
 
 test("oversized body is rejected with a clean 413 and connection close", async () => {
-  await withApp(async () => {}, async (base) => {
+  await withApp(async ({ base }) => {
     const res = await post(base, "x".repeat(4_000), "00".repeat(32));
     assert.equal(res.status, 413);
     assert.equal(res.headers.get("connection"), "close");
@@ -154,7 +286,7 @@ test("oversized body is rejected with a clean 413 and connection close", async (
 });
 
 test("oversized chunked body without content-length returns 413", async () => {
-  await withApp(async () => {}, async (base) => {
+  await withApp(async ({ base }) => {
     const status = await new Promise<number>((resolve, reject) => {
       let responded = false;
       const req = request(`${base}/webhooks/linear`, { method: "POST" }, (res) => {
@@ -173,65 +305,39 @@ test("oversized chunked body without content-length returns 413", async () => {
   });
 });
 
-const issueBody = (extra: Record<string, unknown>): string =>
-  JSON.stringify({
-    action: "create", type: "Issue", webhookTimestamp: 1_000_000, ...extra,
-    data: { identifier: "K-1", title: "T", url: "https://l/K-1", projectId: "proj-1", ...(extra.data as object) },
+test("a store failure while finishing the event is logged and never rejects the deferred task", async () => {
+  const errors: string[] = [];
+  await withApp(async (h) => {
+    const body = payload(1_000_000);
+    assert.equal((await post(h.base, body, sign(body), "d-1")).status, 200);
+    await h.settle();
+    assert.ok(errors.some((line) => line.includes("disk full")));
+  }, {
+    logger: { ...silent, error: (line) => void errors.push(line) },
+    wrapStore: (store) => ({ ...store, finishEvent: () => { throw new Error("disk full"); } }),
   });
+});
 
-const runWebhook = async (body: string, userMap: Record<string, string> = {}) => {
-  const sent: string[] = [];
-  const infos: string[] = [];
-  const server = createApp({
-    secret, resolveSlack: () => async (t) => { sent.push(t); }, userMap, now: () => 1_000_000,
-    logger: { info: (l) => infos.push(l), error: () => {} },
+test("a missing or repeated Linear-Delivery header logs a warning but still processes the event", async () => {
+  const warnings: string[] = [];
+  await withApp(async (h) => {
+    await deliver(h, payload(1_000_000));
+    assert.equal(h.sent.length, 1);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] as string, /Linear-Delivery/);
+    await deliver(h, payload(1_000_000), "d-1");
+    assert.equal(warnings.length, 1);
+  }, { logger: { ...silent, warn: (line) => void warnings.push(line) } });
+});
+
+test("a created notice still in flight suppresses the assigned notice that follows it", async () => {
+  await withApp(async (h) => {
+    h.store.beginEvent({
+      deliveryId: "d-1", kind: "created", issueIdentifier: "K-1", issueTitle: "T", projectId: "proj-1",
+      issueId: "iss-1", assigneeId: "u-beto", outcome: "failed", reason: "in-flight", targets: [],
+    });
+    await deliver(h, assignedBody({ id: "u-beto", name: "Beto" }), "d-2");
+    assert.deepEqual(h.sent, []);
+    assert.equal(h.store.recentEvents()[0]?.reason, "assigned-at-create");
   });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
-  try {
-    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    assert.equal((await post(base, body, sign(body))).status, 200);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  } finally {
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
-  }
-  return { sent, infos };
-};
-
-test("prototype-like user ids are never treated as mapped", async () => {
-  for (const id of ["__proto__", "constructor", "toString"]) {
-    const { sent, infos } = await runWebhook(
-      issueBody({ actor: { id, name: "Ana" }, data: { assignee: { id: "x" + id, name: "Beto" } } }),
-    );
-    assert.deepEqual(sent, ["Ana creó <https://l/K-1|K-1>: T y se lo asignó a Beto"]);
-    assert.ok(infos.includes(`Issue event: kind=created actor=${id} actor_mapped=no assignee=x${id} assignee_mapped=no`));
-    const asAssignee = await runWebhook(
-      issueBody({ actor: { name: "Ana" }, data: { assignee: { id, name: "Beto" } } }),
-    );
-    assert.deepEqual(asAssignee.sent, ["Ana creó <https://l/K-1|K-1>: T y se lo asignó a Beto"]);
-  }
-});
-
-test("Issue events log a compact diagnostic with mapped flags", async () => {
-  const { infos } = await runWebhook(
-    issueBody({ actor: { id: "u-ana", name: "Ana" }, data: { assignee: { id: "other", name: "Beto" } } }),
-    { "u-ana": "UANA" },
-  );
-  assert.ok(infos.includes("Issue event: kind=created actor=u-ana actor_mapped=yes assignee=other assignee_mapped=no"));
-});
-
-test("non-Issue payloads log nothing; ignored Issue events log action and reason", async () => {
-  const comment = await runWebhook(issueBody({ type: "Comment", actor: { name: "Ana" } }));
-  assert.deepEqual(comment.infos, []);
-  assert.deepEqual(comment.sent, []);
-  const removed = await runWebhook(issueBody({ action: "remove", actor: { name: "Ana" } }));
-  assert.deepEqual(removed.infos, ["Issue event ignored: action=remove reason=not a notifiable event"]);
-});
-
-test("unresolvable assignee on an assigned update is ignored with a reason", async () => {
-  const { sent, infos } = await runWebhook(
-    issueBody({ action: "update", actor: { name: "Ana" }, updatedFrom: { assigneeId: null }, data: { assigneeId: "ghost" } }),
-  );
-  assert.deepEqual(sent, []);
-  assert.deepEqual(infos, ["Issue event ignored: action=update reason=assignee not resolvable"]);
 });

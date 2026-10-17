@@ -7,6 +7,7 @@ export type IssueNotice = {
   actor: Person;
   creator: Person | null;
   assignee: Person | null;
+  issueId: string | null;
   identifier: string;
   title: string;
   url: string;
@@ -54,6 +55,7 @@ export const classifyEvent = (payload: unknown): IssueNotice | Ignored => {
     actor: personOf(payload.actor) ?? { id: null, name: null },
     creator: personOf(data.creator, data.creatorId),
     assignee,
+    issueId: nonEmptyString(data.id),
     identifier,
     title,
     url,

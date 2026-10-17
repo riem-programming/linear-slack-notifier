@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { classifyEvent } from "../src/events.ts";
 
 const data = {
+  id: "iss-9",
   identifier: "KAMAITI-9",
   title: "Fix login",
   url: "https://linear.app/kamai/issue/KAMAITI-9/fix-login",
@@ -26,6 +27,7 @@ test("created carries actor, creator, assignee and issue fields", () => {
     actor,
     creator: { id: "u-ana", name: null },
     assignee: beto,
+    issueId: "iss-9",
     identifier: "KAMAITI-9",
     title: "Fix login",
     url: data.url,

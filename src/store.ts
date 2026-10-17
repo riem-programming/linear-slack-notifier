@@ -20,10 +20,13 @@ export type EventEntry = {
   issueIdentifier: string | null;
   issueTitle: string | null;
   projectId: string | null;
+  issueId?: string | null;
+  assigneeId?: string | null;
   outcome: EventOutcome;
   reason: string | null;
   targets: EventTarget[];
 };
+export type EventResult = { outcome: EventOutcome; reason: string | null; targets: EventTarget[] };
 export type LoggedEvent = EventEntry & { id: number; receivedAt: string };
 
 export type Store = {
@@ -39,6 +42,13 @@ export type Store = {
   getPerson: (linearUserId: string) => Person | null;
   listPeople: () => Person[];
   insertEvent: (entry: EventEntry) => boolean;
+  // Claims a delivery before posting; returns the row id, or null when the delivery id was already recorded.
+  beginEvent: (entry: EventEntry) => number | null;
+  finishEvent: (id: number, result: EventResult) => void;
+  // True when a created notice for this issue and assignee was delivered to at least one channel or is still in flight.
+  hasNotifiedCreate: (issueId: string, assigneeId: string) => boolean;
+  // Relabels in-flight rows older than the window as interrupted (the process died mid-delivery). Returns rows changed.
+  sweepInterrupted: (olderThanMs: number) => number;
   recentEvents: (limit?: number) => LoggedEvent[];
 };
 
@@ -61,6 +71,8 @@ const toEvent = (row: Row): LoggedEvent => ({
   issueIdentifier: row.issue_identifier as string | null,
   issueTitle: row.issue_title as string | null,
   projectId: row.project_id as string | null,
+  issueId: row.issue_id as string | null,
+  assigneeId: row.assignee_id as string | null,
   outcome: row.outcome as EventOutcome,
   reason: row.reason as string | null,
   targets: row.targets ? (JSON.parse(row.targets as string) as EventTarget[]) : [],
@@ -69,6 +81,19 @@ const toEvent = (row: Row): LoggedEvent => ({
 export const createStore = (db: DatabaseSync, now: () => number = Date.now): Store => {
   const stamp = (): string => new Date(now()).toISOString();
   const all = (sql: string, ...params: (string | number)[]): Row[] => db.prepare(sql).all(...params) as Row[];
+
+  const begin = (entry: EventEntry): number | null => {
+    const result = db
+      .prepare(
+        `INSERT INTO event_log (delivery_id, received_at, kind, issue_identifier, issue_title, project_id, issue_id, assignee_id, outcome, reason, targets)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING`,
+      )
+      .run(
+        entry.deliveryId, stamp(), entry.kind, entry.issueIdentifier, entry.issueTitle, entry.projectId,
+        entry.issueId ?? null, entry.assigneeId ?? null, entry.outcome, entry.reason, JSON.stringify(entry.targets),
+      );
+    return Number(result.changes) === 1 ? Number(result.lastInsertRowid) : null;
+  };
 
   return {
     upsertChannel: (channel) => {
@@ -117,18 +142,28 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
       return row ? toPerson(row) : null;
     },
     listPeople: () => all("SELECT * FROM people ORDER BY name, linear_user_id").map(toPerson),
-    insertEvent: (entry) =>
+    insertEvent: (entry) => begin(entry) !== null,
+    beginEvent: begin,
+    finishEvent: (id, result) => {
+      db.prepare("UPDATE event_log SET outcome = ?, reason = ?, targets = ? WHERE id = ?").run(
+        result.outcome, result.reason, JSON.stringify(result.targets), id,
+      );
+    },
+    sweepInterrupted: (olderThanMs) =>
       Number(
         db
-          .prepare(
-            `INSERT INTO event_log (delivery_id, received_at, kind, issue_identifier, issue_title, project_id, outcome, reason, targets)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING`,
-          )
-          .run(
-            entry.deliveryId, stamp(), entry.kind, entry.issueIdentifier, entry.issueTitle, entry.projectId,
-            entry.outcome, entry.reason, JSON.stringify(entry.targets),
-          ).changes,
-      ) === 1,
+          .prepare("UPDATE event_log SET reason = 'interrupted' WHERE outcome = 'failed' AND reason = 'in-flight' AND received_at < ?")
+          .run(new Date(now() - olderThanMs).toISOString()).changes,
+      ),
+    hasNotifiedCreate: (issueId, assigneeId) =>
+      all(
+        `SELECT 1 AS hit FROM event_log WHERE kind = 'created' AND issue_id = ? AND assignee_id = ?
+         AND (outcome = 'notified'
+           OR (outcome = 'failed' AND (reason = 'in-flight'
+             OR EXISTS (SELECT 1 FROM json_each(event_log.targets) WHERE json_extract(value, '$.outcome') = 'notified'))))
+         LIMIT 1`,
+        issueId, assigneeId,
+      ).length > 0,
     recentEvents: (limit = DEFAULT_RECENT_EVENTS) =>
       all("SELECT * FROM event_log ORDER BY received_at DESC, id DESC LIMIT ?", limit).map(toEvent),
   };

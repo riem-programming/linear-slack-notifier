@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { BodyTooLargeError, parseForm, parseJson, readBody, redirect, send, sendHtml } from "../src/http.ts";
+import { BodyTooLargeError, headerValue, parseForm, parseJson, readBody, redirect, send, sendHtml } from "../src/http.ts";
 
 const withServer = async (
   handler: (req: IncomingMessage, res: ServerResponse) => void,
@@ -81,4 +81,11 @@ test("readBody rejects bodies over the limit with BodyTooLargeError", async () =
       assert.equal(res.status, 413);
     },
   );
+});
+
+test("headerValue returns a single string header and null for missing or repeated ones", () => {
+  assert.equal(headerValue("abc"), "abc");
+  assert.equal(headerValue(undefined), null);
+  assert.equal(headerValue(["a", "b"]), null);
+  assert.equal(headerValue(""), null);
 });
