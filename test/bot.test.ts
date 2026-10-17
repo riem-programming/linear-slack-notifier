@@ -60,7 +60,7 @@ test("no argument in a linked channel posts one block per project in name order,
 test("no argument in an unlinked channel returns ephemeral help with the project list", async () => {
   const { bot, out } = setup();
   await bot.command(cmd("  "));
-  assert.match(out[0] as string, /^ephemeral\|Este canal no tiene proyectos vinculados\. Usá \/estado <proyecto>\./);
+  assert.match(out[0] as string, /^ephemeral\|Este canal no tiene proyectos vinculados\. Usá \/estado \[proyecto\]\./);
   for (const p of projects) assert.ok((out[0] as string).includes(p.name.replace("&", "&amp;")));
 });
 
@@ -135,11 +135,11 @@ test("an ephemeral reply to a mention inside a thread keeps the thread", async (
 test("help names the slash command that was used, falling back to /estado", async () => {
   const dev = setup();
   await dev.bot.command(cmd("", "C2", "/estado-dev"));
-  assert.ok((dev.out[0] as string).includes("Usá /estado-dev <proyecto>."));
+  assert.ok((dev.out[0] as string).includes("Usá /estado-dev [proyecto]."));
   const odd = setup();
   await odd.bot.command(cmd("", "C2", "/x <!channel>"));
-  assert.ok((odd.out[0] as string).includes("Usá /estado <proyecto>."));
+  assert.ok((odd.out[0] as string).includes("Usá /estado [proyecto]."));
   const mention = setup();
   await mention.bot.mention({ text: "<@UBOT>", channel: "C2", user: "U1" });
-  assert.ok((mention.out[0] as string).includes("Usá /estado <proyecto>."));
+  assert.ok((mention.out[0] as string).includes("Usá /estado [proyecto]."));
 });
