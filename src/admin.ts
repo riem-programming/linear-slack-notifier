@@ -55,13 +55,13 @@ const formatTime = (iso: string, timeZone: string): string => {
   return new Intl.DateTimeFormat("sv-SE", { timeZone, dateStyle: "short", timeStyle: "medium" }).format(date);
 };
 
-const eventRow = (event: LoggedEvent, timeZone: string): Html => {
+const eventRow = (event: LoggedEvent, timeZone: string, channelName: (id: string) => string): Html => {
   const issue = event.issueIdentifier
     ? html`<strong>${event.issueIdentifier}</strong> ${event.issueTitle ?? ""}`
     : html`<span class="muted">—</span>`;
   const reason = event.reason ? (REASONS[event.reason] ?? event.reason) : "";
   const targets = event.targets.length
-    ? html`<ul>${event.targets.map((t) => html`<li>${t.channel}: ${OUTCOMES[t.outcome] ?? t.outcome}${t.error ? html` (${t.error})` : ""}</li>`)}</ul>`
+    ? html`<ul>${event.targets.map((t) => html`<li>${channelName(t.channel)}: ${OUTCOMES[t.outcome] ?? t.outcome}${t.error ? html` (${t.error})` : ""}</li>`)}</ul>`
     : html`<span class="muted">—</span>`;
   return html`<tr data-event>
 <td>${formatTime(event.receivedAt, timeZone)}</td>
@@ -75,6 +75,8 @@ const eventRow = (event: LoggedEvent, timeZone: string): Html => {
 
 const statusPage = (store: Store, timeZone: string, showAll: boolean): Html => {
   const events = store.recentEvents(RECENT_EVENTS, { hideUnclassified: !showAll });
+  const names = new Map(store.listChannels().map((channel) => [channel.id, channel.name]));
+  const channelName = (id: string): string => (names.has(id) ? `#${names.get(id)}` : id);
   const toggle = showAll
     ? html`<a href="/admin/status">Ocultar eventos sin clasificar</a>`
     : html`<a href="/admin/status?all=1">Mostrar todos los eventos</a>`;
@@ -84,7 +86,7 @@ const statusPage = (store: Store, timeZone: string, showAll: boolean): Html => {
     ? html`<p class="muted">${events.length === 1 ? "Último evento" : `Últimos ${events.length} eventos`}, del más reciente al más antiguo. Hora: ${timeZone}. ${toggle}</p>
 <table>
 <thead><tr><th scope="col">Hora</th><th scope="col">Tipo</th><th scope="col">Incidencia</th><th scope="col">Resultado</th><th scope="col">Motivo</th><th scope="col">Canales</th></tr></thead>
-<tbody>${events.map((event) => eventRow(event, timeZone))}</tbody>
+<tbody>${events.map((event) => eventRow(event, timeZone, channelName))}</tbody>
 </table>`
     : html`<p>${empty} ${toggle}</p>`;
   return layout({ title: "Estado", current: "status", body });

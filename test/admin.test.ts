@@ -123,6 +123,7 @@ test("status page shows an empty state when there are no events", () =>
 
 test("status lists events newest first with Lima time, kind, issue, outcome, reason and targets", () =>
   withApp(async ({ base, store }) => {
+    store.upsertChannel({ id: "C1", name: "test", isMember: true });
     seedEvent(store, { issueIdentifier: "KAM-1", issueTitle: "Listo", reason: null });
     seedEvent(store, { kind: "assigned", issueIdentifier: "KAM-2", issueTitle: "Sin canal", projectId: "p2", outcome: "skipped", reason: "project-not-linked", targets: [] });
     seedEvent(store, {
@@ -138,7 +139,9 @@ test("status lists events newest first with Lima time, kind, issue, outcome, rea
     assert.match(text, /Omitido/);
     assert.match(text, /El proyecto no tiene un canal vinculado/);
     assert.match(text, /Fallido/);
-    assert.match(text, /C1/);
+    assert.match(text, /#test/);
+    assert.match(text, /C2/);
+    assert.doesNotMatch(text, /C1/);
     assert.match(text, /not_in_channel/);
     assert.match(text, /Notificado/);
   }));
@@ -156,12 +159,14 @@ test("status shows at most the 50 most recent events and falls back to the raw r
 
 test("status escapes hostile titles, reasons and channel errors", () =>
   withApp(async ({ base, store }) => {
+    store.upsertChannel({ id: "<i>C</i>", name: "<b>canal</b>", isMember: true });
     seedEvent(store, {
       issueTitle: "<script>alert(1)</script>", issueIdentifier: "<b>K</b>", outcome: "failed", reason: "<img src=x>",
       targets: [{ channel: "<i>C</i>", outcome: "failed", error: "<svg onload=1>" }],
     });
     const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
-    assert.doesNotMatch(text, /<script>alert|<b>K|<img src|<i>C|<svg/);
+    assert.doesNotMatch(text, /<script>alert|<b>K|<img src|<i>C|<b>canal|<svg/);
+    assert.match(text, /#&lt;b&gt;canal&lt;\/b&gt;/);
     assert.match(text, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   }));
 
