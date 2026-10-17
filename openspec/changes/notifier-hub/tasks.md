@@ -102,11 +102,11 @@ Checklist:
 - Linear ticket: "Clasificacion y formato de notificaciones" - Clasificar eventos de Linear (creada, asignada, completada, cancelada), aplicar reglas de mencion sin mencionar al actor y generar el texto del aviso.
 
 Checklist:
-- [ ] 2a.1 RED `test/events.test.ts`: created, assigned, completed, canceled, irrelevant update -> `Ignored`; created-with-assignee then update within 10s -> skipped `assigned-at-create` (D10).
-- [ ] 2a.2 RED `test/notify.test.ts`: `planMentions` (dedupe, drop actor, creator==assignee, unmatched -> escaped plain name, "Alguien" fallback); `renderNotice` copy per kind with emojis (checkmark / prohibited) matching proposal mockups ("completo", "cancelo").
-- [ ] 2a.3 GREEN `src/events.ts`: pure `classifyEvent(payload)`; remove old rendering.
-- [ ] 2a.4 GREEN `src/notify.ts`: `planMentions`, `renderNotice`.
-- [ ] 2a.5 REFACTOR: remove dead code in old events path; fix imports so `pnpm typecheck` passes (temporarily adapt `app.ts` call site if needed).
+- [x] 2a.1 RED `test/events.test.ts`: created, assigned, completed, canceled, irrelevant update -> `Ignored`; created-with-assignee then update within 10s -> skipped `assigned-at-create` (D10).
+- [x] 2a.2 RED `test/notify.test.ts`: `planMentions` (dedupe, drop actor, creator==assignee, unmatched -> escaped plain name, "Alguien" fallback); `renderNotice` copy per kind with emojis (checkmark / prohibited) matching proposal mockups ("completo", "cancelo").
+- [x] 2a.3 GREEN `src/events.ts`: pure `classifyEvent(payload)`; remove old rendering.
+- [x] 2a.4 GREEN `src/notify.ts`: `planMentions`, `renderNotice`.
+- [x] 2a.5 REFACTOR: remove dead code in old events path; fix imports so `pnpm typecheck` passes (temporarily adapt `app.ts` call site if needed).
 - Verify: `pnpm test`, `pnpm typecheck`.
 
 ---
