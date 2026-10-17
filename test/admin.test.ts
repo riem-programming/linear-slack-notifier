@@ -575,3 +575,11 @@ test("a whitespace-only Slack id is a clear request and a lowercase id is reject
     assert.equal(blank.headers.get("location"), "/admin/people?status=override-cleared");
     assert.deepEqual([h.store.getPerson("u2")?.slackUserId, h.store.getPerson("u2")?.matchSource], ["UANA2", "auto"]);
   }, { lookup: async () => "UANA2" }));
+
+test("people page reactivates stored people who are active again in Linear", () =>
+  withApp(async ({ base, store }) => {
+    store.upsertPerson({ linearUserId: "u1", name: "Luis", email: null, slackUserId: "UMAN", matchSource: "manual", active: false });
+    const text = await (await fetch(`${base}/admin/people`, { headers: auth() })).text();
+    assert.match(rowOf(text, "Luis"), /Manual[\s\S]*UMAN/);
+    assert.equal(store.getPerson("u1")?.active, true);
+  }, { users: async () => LINEAR_USERS }));

@@ -147,3 +147,13 @@ test("listUsers caches, shares in-flight requests and replays failures independe
   await assert.rejects(api.listUsers(), /status 500/);
   assert.equal(calls.length, 3);
 });
+
+test("listUsers marks the result as truncated when the page cap is hit", async () => {
+  const pages = Array.from({ length: 25 }, (_, i) => usersPage([{ id: `u${i}`, name: `N${i}`, active: true }], `c${i}`));
+  const { fetch } = fakeFetch(...pages);
+  const users = await createLinearApi({ apiKey: "k", fetch, logger: { warn: () => {} } }).listUsers();
+  assert.equal(users.length, 20);
+  assert.equal(users.truncated, true);
+  const { fetch: complete } = fakeFetch(usersPage([{ id: "u1", name: "A", active: true }]));
+  assert.equal((await createLinearApi({ apiKey: "k", fetch: complete }).listUsers()).truncated, undefined);
+});

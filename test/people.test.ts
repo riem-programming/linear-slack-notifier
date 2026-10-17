@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openDb } from "../src/db.ts";
-import { clearOverride, isSlackMemberId, setOverride, syncPeople } from "../src/people.ts";
+import { clearOverride, deactivateMissing, isSlackMemberId, reactivateReturning, setOverride, syncPeople } from "../src/people.ts";
 import { createStore } from "../src/store.ts";
 import type { LinearUser } from "../src/linear.ts";
 
@@ -174,4 +174,29 @@ test("a manual row survives deactivate then reactivate with the same Slack id, a
   await syncPeople([user("m", "Manual", "m@x.com"), user("a", "Auto", "a@x.com"), user("other", "Other", "o@x.com")], lookup, store);
   assert.deepEqual(store.getPerson("m"), { linearUserId: "m", name: "Manual", email: "m@x.com", slackUserId: "UMAN", matchSource: "manual", active: true });
   assert.deepEqual([store.getPerson("a")?.slackUserId, store.getPerson("a")?.active], ["UNEW", true]);
+});
+
+test("deactivation is skipped for a truncated read and for a list without any active user", async () => {
+  const store = setup();
+  store.upsertPerson({ linearUserId: "u1", name: "Luis", email: null, slackUserId: "ULUIS", matchSource: "auto" });
+  const warnings: string[] = [];
+  const warn = (message: string): void => void warnings.push(message);
+  deactivateMissing(Object.assign([user("other", "Other", "o@x.com")], { truncated: true }), store, warn);
+  assert.equal(store.getPerson("u1")?.active, true);
+  deactivateMissing([user("other", "Other", "o@x.com", false)], store, warn);
+  assert.equal(store.getPerson("u1")?.active, true);
+  assert.equal(warnings.length, 2);
+  deactivateMissing([user("other", "Other", "o@x.com")], store, warn);
+  assert.equal(store.getPerson("u1")?.active, false);
+});
+
+test("reactivateReturning restores inactive people who are active again without touching their data", () => {
+  const store = setup();
+  store.upsertPerson({ linearUserId: "m", name: "M", email: null, slackUserId: "UMAN", matchSource: "manual", active: false });
+  store.upsertPerson({ linearUserId: "a", name: "A", email: null, slackUserId: "UAUTO", matchSource: "auto", active: false });
+  store.upsertPerson({ linearUserId: "x", name: "X", email: null, slackUserId: "UX", matchSource: "auto", active: false });
+  reactivateReturning([user("m", "M", null), user("a", "A", null), user("x", "X", null, false)], store);
+  assert.deepEqual(["m", "a", "x"].map((id) => store.getPerson(id)?.active), [true, true, false]);
+  assert.deepEqual([store.getPerson("m")?.slackUserId, store.getPerson("m")?.matchSource], ["UMAN", "manual"]);
+  assert.equal(store.getPerson("a")?.slackUserId, "UAUTO");
 });

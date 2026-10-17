@@ -1,4 +1,4 @@
-import type { LinearUser } from "./linear.ts";
+import type { LinearUser, LinearUserList } from "./linear.ts";
 import type { MatchSource, Store } from "./store.ts";
 
 // Resolves an email to a Slack member id, or null when Slack has no such user. Throws on upstream failures.
@@ -17,17 +17,26 @@ const match = async (email: string | null, lookup: EmailLookup): Promise<{ slack
 };
 
 // Stored people who are inactive or missing from a successful Linear read are flagged inactive (data is kept),
-// so they are never mentioned or listed. An empty list is suspicious (outage, revoked scope) and changes nothing.
-export const deactivateMissing = (users: LinearUser[], store: PeopleStore, warn: (message: string) => void = () => {}): void => {
-  if (users.length === 0) {
-    warn("Linear returned no users: skipping deactivation");
+// so they are never mentioned or listed. A truncated list or one with no active user is suspicious and changes nothing.
+export const deactivateMissing = (users: LinearUserList, store: PeopleStore, warn: (message: string) => void = () => {}): void => {
+  const activeIds = new Set(users.filter((user) => user.active).map((user) => user.id));
+  if (users.truncated || activeIds.size === 0) {
+    warn(users.truncated ? "Linear user list is truncated: skipping deactivation" : "Linear returned no active users: skipping deactivation");
     return;
   }
-  const activeIds = new Set(users.filter((user) => user.active).map((user) => user.id));
   for (const person of store.listPeople()) {
     if (person.active !== false && !activeIds.has(person.linearUserId)) {
       store.upsertPerson({ ...person, active: false });
     }
+  }
+};
+
+// Restores inactive people who are active in Linear again. Their stored data is untouched: manual rows come back
+// as they were and auto rows keep their Slack id until the next sync re-matches them.
+export const reactivateReturning = (users: LinearUser[], store: PeopleStore): void => {
+  for (const user of users) {
+    const person = user.active ? store.getPerson(user.id) : null;
+    if (person?.active === false) store.upsertPerson({ ...person, active: true });
   }
 };
 

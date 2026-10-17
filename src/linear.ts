@@ -6,10 +6,13 @@ const MAX_PAGES = 20;
 export type LinearProject = { id: string; name: string };
 export type LinearUser = { id: string; name: string; email: string | null; active: boolean };
 
+// `truncated` is set when the page cap cut the list short: it must not be read as the complete set of users.
+export type LinearUserList = LinearUser[] & { truncated?: boolean };
+
 export type LinearApi = {
   // Both lists are cached for 5 minutes; failures are replayed briefly and never cached as data.
   listProjects: () => Promise<LinearProject[]>;
-  listUsers: () => Promise<LinearUser[]>;
+  listUsers: () => Promise<LinearUserList>;
 };
 
 type LinearApiOptions = {
@@ -69,7 +72,7 @@ export const createLinearApi = ({ apiKey, fetch: fetchImpl = globalThis.fetch, n
       if (after === null) return items;
     }
     logger.warn(`Linear ${field} list truncated at ${MAX_PAGES} pages`);
-    return items;
+    return Object.assign(items, { truncated: true });
   };
 
   // One cache, in-flight promise and failure replay per list.
@@ -100,6 +103,6 @@ export const createLinearApi = ({ apiKey, fetch: fetchImpl = globalThis.fetch, n
 
   return {
     listProjects: memo(() => fetchAll(PROJECTS_QUERY, "projects", toProject)),
-    listUsers: memo(() => fetchAll(USERS_QUERY, "users", toUser)),
+    listUsers: memo(() => fetchAll(USERS_QUERY, "users", toUser)) as () => Promise<LinearUserList>,
   };
 };

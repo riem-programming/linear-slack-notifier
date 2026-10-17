@@ -5,7 +5,7 @@ import { BodyTooLargeError, parseForm, readBody, redirect, send, sendHtml } from
 import { html, layout } from "./html.ts";
 import type { Html } from "./html.ts";
 import type { LinearApi } from "./linear.ts";
-import { clearOverride, deactivateMissing, setOverride, syncPeople } from "./people.ts";
+import { clearOverride, deactivateMissing, reactivateReturning, setOverride, syncPeople } from "./people.ts";
 import type { SlackApi } from "./slack.ts";
 import type { Channel, LoggedEvent, MatchSource, Person, Project, Store } from "./store.ts";
 
@@ -225,6 +225,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
       // Known Linear users appear right away as unlinked so an override can be set before the first sync.
       const users = await linear.listUsers();
       deactivateMissing(users, store, (message) => logger.warn(message));
+      reactivateReturning(users, store);
       for (const user of users) {
         if (user.active && !store.getPerson(user.id)) {
           store.upsertPerson({ linearUserId: user.id, name: user.name, email: user.email?.trim() || null, slackUserId: null, matchSource: "unmatched" });
