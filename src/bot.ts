@@ -35,6 +35,7 @@ export const parseMention = (text: string): string =>
     .replace(/&amp;/g, "&");
 
 const DEFAULT_COMMAND = "/estado";
+// Square brackets, not angle brackets: Slack mrkdwn treats <...> as link syntax.
 // The payload's command name is echoed in help text, so only a plain slash-command shape is trusted.
 const commandName = (value: string | undefined): string => (value && /^\/[a-z0-9_-]{1,32}$/i.test(value) ? value : DEFAULT_COMMAND);
 
@@ -60,7 +61,7 @@ export const createBot = ({ store, linear, slack, now, timeZone, logger }: BotOp
       const linked = store.projectsForChannel(channelId);
       if (linked.length > 0) return await summaries(linked.map((project) => project.id));
       const names = (await linear.listProjects()).map((project) => project.name);
-      return { text: `Este canal no tiene proyectos vinculados. Usá ${command} <proyecto>.\nProyectos disponibles:\n${list(names)}`, visibility: "ephemeral" };
+      return { text: `Este canal no tiene proyectos vinculados. Usá ${command} [proyecto].\nProyectos disponibles:\n${list(names)}`, visibility: "ephemeral" };
     } catch (error) {
       // The reply is generic on purpose; the detail (a fixed, secret-free client message) only goes to the log.
       logger.warn(`Status reply failed: ${error instanceof Error ? error.message : "unknown error"}`);

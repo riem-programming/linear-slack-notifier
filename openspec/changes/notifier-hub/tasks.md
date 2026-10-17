@@ -246,10 +246,10 @@ Checklist:
 - Linear ticket: "Integracion de GitHub con Linear" - Configurar la integracion nativa para que un PR fusionado en develop mueva la tarea a Hecho, o documentar el cierre manual si el plan no lo permite.
 
 Checklist:
-- [ ] 5.1 USER: check plan availability and install the integration.
-- [ ] 5.2 USER: configure the workflow rule for `develop`.
+- [x] 5.1 USER: check plan availability and install the integration.
+- [x] 5.2 USER: configure the workflow rule for `develop`.
 - [ ] 5.3 Verify: merge a test PR and confirm the issue moves to Done and the notifier posts "completed" on staging.
-- [ ] 5.4 Add the flow note to `docs/OPERATIONS.md` (or fold into slice 6).
+- [x] 5.4 Add the flow note to `docs/OPERATIONS.md` (or fold into slice 6). Done: docs/GITHUB-LINEAR.md.
 
 ---
 
@@ -265,8 +265,8 @@ Checklist:
 - Linear ticket: "Validacion en staging y salida a produccion" - Validar los criterios de exito en staging, documentar la operacion y realizar el pase a produccion con plan de reversa.
 
 Checklist:
-- [ ] 6.1 Write `docs/OPERATIONS.md` (Slack setup, env table, backup/restore with `VACUUM INTO`, cutover, rollback, 48h cleanup).
-- [ ] 6.1b Follow-up (from 3b, design D12): document in `docs/OPERATIONS.md` that channels archived/deleted in Slack keep their links until unlinked manually, and that posts to them show as failed (`channel_not_found` / `is_archived`) on Status.
+- [x] 6.1 Write `docs/OPERATIONS.md` (Slack setup, env table, backup/restore with `VACUUM INTO`, cutover, rollback, 48h cleanup).
+- [x] 6.1b Follow-up (from 3b, design D12): document in `docs/OPERATIONS.md` that channels archived/deleted in Slack keep their links until unlinked manually, and that posts to them show as failed (`channel_not_found` / `is_archived`) on Status.
 - [ ] 6.2 Staging validation against proposal section 10 (all four notice types, skipped with reason, `/estado-dev` cases, People auto-match, 401 without password).
 - [ ] 6.3 USER: provide prod prerequisites above.
 - [ ] 6.4 Cutover: merge `develop` -> `main`, deploy, then refresh channels, sync people, link projects in the UI; verify with a test issue.
