@@ -266,6 +266,7 @@ Checklist:
 
 Checklist:
 - [ ] 6.1 Write `docs/OPERATIONS.md` (Slack setup, env table, backup/restore with `VACUUM INTO`, cutover, rollback, 48h cleanup).
+- [ ] 6.1b Follow-up (from 3b, design D12): document in `docs/OPERATIONS.md` that channels archived/deleted in Slack keep their links until unlinked manually, and that posts to them show as failed (`channel_not_found` / `is_archived`) on Status.
 - [ ] 6.2 Staging validation against proposal section 10 (all four notice types, skipped with reason, `/estado-dev` cases, People auto-match, 401 without password).
 - [ ] 6.3 USER: provide prod prerequisites above.
 - [ ] 6.4 Cutover: merge `develop` -> `main`, deploy, then refresh channels, sync people, link projects in the UI; verify with a test issue.

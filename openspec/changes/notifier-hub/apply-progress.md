@@ -223,3 +223,11 @@ Mode: Strict TDD. Branch: `feat/kamaiti-79-admin-channels` (base `origin/develop
 
 ### Status
 Slice 3b: 4/4 tasks complete (32/32 across 1a-3b). Slices 3c-6 remain. Suite 162/162, typecheck clean.
+
+### Batch 6b - Review fixes on slice 3b (strict TDD, tests first)
+- Flash lookup uses `Object.hasOwn`: `?status=constructor|__proto__|toString|hasOwnProperty` renders no flash.
+- `listProjects` shares one in-flight promise (concurrent calls fetch once) and replays a failure for 30s (no repeated 5s waits during an outage); success clears it. Cache TTL tests unchanged.
+- Admin logs the client error message (fixed secret-free strings: Slack error codes, `Linear responded with status N`) instead of the class name; tests assert the message is logged and no token/key appears.
+- Linear logs a warning when the 20-page cap truncates the list; nodes without non-empty string `id` and `name` are skipped.
+- Decision D12 (design.md): refresh only upserts. Channels archived/deleted in Slack keep their links until unlinked manually; posts to them are logged as failed (`channel_not_found` / `is_archived`). No schema change in this slice. Follow-up 6.1b added to tasks.md for `docs/OPERATIONS.md`.
+- Suite 167/167, typecheck clean.
