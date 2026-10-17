@@ -20,6 +20,7 @@ type BotOptions = {
   slack: Pick<SlackApi, "postMessage" | "postEphemeral" | "respond">;
   now: () => number;
   timeZone: string;
+  commandName: string;
   logger: Pick<Console, "warn">;
 };
 
@@ -34,14 +35,13 @@ export const parseMention = (text: string): string =>
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&");
 
-const DEFAULT_COMMAND = "/estado";
 // Square brackets, not angle brackets: Slack mrkdwn treats <...> as link syntax.
 // The payload's command name is echoed in help text, so only a plain slash-command shape is trusted.
-const commandName = (value: string | undefined): string => (value && /^\/[a-z0-9_-]{1,32}$/i.test(value) ? value : DEFAULT_COMMAND);
+const commandName = (value: string | undefined, fallback: string): string => (value && /^\/[a-z0-9_-]{1,32}$/i.test(value) ? value : fallback);
 
 const list = (names: string[]): string => names.map((name) => `• ${escapeText(name)}`).join("\n");
 
-export const createBot = ({ store, linear, slack, now, timeZone, logger }: BotOptions): Bot => {
+export const createBot = ({ store, linear, slack, now, timeZone, commandName: configuredCommand, logger }: BotOptions): Bot => {
   const summaries = async (ids: string[]): Promise<Reply> => {
     const snapshots = await Promise.all(ids.map((id) => linear.projectSnapshot(id)));
     return { text: renderStatusMessage(snapshots.map((snapshot) => summarizeProject(snapshot, now(), timeZone))), visibility: "in_channel" };
@@ -61,21 +61,21 @@ export const createBot = ({ store, linear, slack, now, timeZone, logger }: BotOp
       const linked = store.projectsForChannel(channelId);
       if (linked.length > 0) return await summaries(linked.map((project) => project.id));
       const names = (await linear.listProjects()).map((project) => project.name);
-      return { text: `Este canal no tiene proyectos vinculados. Usá ${command} [proyecto].\nProyectos disponibles:\n${list(names)}`, visibility: "ephemeral" };
+      return { text: `Este canal no tiene proyectos vinculados. Usa ${command} [proyecto].\nProyectos disponibles:\n${list(names)}`, visibility: "ephemeral" };
     } catch (error) {
       // The reply is generic on purpose; the detail (a fixed, secret-free client message) only goes to the log.
       logger.warn(`Status reply failed: ${error instanceof Error ? error.message : "unknown error"}`);
-      return { text: "No pude consultar Linear en este momento. Probá de nuevo en unos minutos.", visibility: "ephemeral" };
+      return { text: "No pude consultar Linear en este momento. Prueba de nuevo en unos minutos.", visibility: "ephemeral" };
     }
   };
 
   return {
     command: async ({ text, channelId, responseUrl, command }) => {
-      const { text: message, visibility } = await reply(text.trim(), channelId, commandName(command));
+      const { text: message, visibility } = await reply(text.trim(), channelId, commandName(command, configuredCommand));
       await slack.respond(responseUrl, message, visibility);
     },
     mention: async ({ text, channel, user, threadTs }) => {
-      const { text: message, visibility } = await reply(parseMention(text), channel, DEFAULT_COMMAND);
+      const { text: message, visibility } = await reply(parseMention(text), channel, configuredCommand);
       if (visibility === "in_channel") await slack.postMessage(channel, message, threadTs);
       else await slack.postEphemeral(channel, user, message, threadTs);
     },
