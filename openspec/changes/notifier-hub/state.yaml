@@ -1,0 +1,36 @@
+change: notifier-hub
+artifact_store: openspec
+phases:
+  explore: skipped
+  proposal: done
+  spec: done
+  design: done
+  tasks: done
+  apply: pending
+  verify: pending
+  archive: pending
+artifacts:
+  proposal: openspec/changes/notifier-hub/proposal.md
+  specs:
+    - openspec/changes/notifier-hub/specs/issue-notifications/spec.md
+    - openspec/changes/notifier-hub/specs/channel-routing/spec.md
+    - openspec/changes/notifier-hub/specs/people-matching/spec.md
+    - openspec/changes/notifier-hub/specs/status-query/spec.md
+    - openspec/changes/notifier-hub/specs/admin-ui/spec.md
+    - openspec/changes/notifier-hub/specs/event-log/spec.md
+    - openspec/changes/notifier-hub/specs/persistence/spec.md
+  design: openspec/changes/notifier-hub/design.md
+  tasks: openspec/changes/notifier-hub/tasks.md
+delivery:
+  strategy: chained-prs
+  chain_strategy: stacked-to-main (adapted; base branch develop, main only at cutover)
+  slices: [1a, 1b, 2a, 2b, 3a, 3b, 3c, 4a, 4b, 5, 6]
+next_recommended: sdd-apply
+resolved_in_design:
+  - multi-project channel layout (combined vs per-project block)
+  - /estado and @bot in DMs and private channels
+  - private channels in Channels list
+  - CSRF mechanism for admin forms
+  - event-log retention
+  - node:sqlite confirmation
+  - exact emoji
