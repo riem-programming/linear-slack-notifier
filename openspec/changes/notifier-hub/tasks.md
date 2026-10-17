@@ -165,10 +165,10 @@ Checklist:
 - Linear ticket: "Pantalla de canales" - Listar canales de Slack y permitir vincular o desvincular proyectos de Linear desde el panel, con soporte para varios proyectos por canal.
 
 Checklist:
-- [ ] 3b.1 RED `test/linear.test.ts` (fake `fetch`): `listProjects` query shape, `Authorization` without `Bearer`, TTL cache hit/expiry.
-- [ ] 3b.2 RED `test/slack.test.ts`: `listChannels` cursor pagination, public + private, non-archived, `isMember`.
-- [ ] 3b.3 RED `test/admin.test.ts`: refresh lists channels; link/unlink via POST (CSRF + Origin enforced, 403 cross-origin, 303 with flash); duplicate link no-op; Slack lookup failure shows an error and keeps stored list; joined vs "invite the bot" labels.
-- [ ] 3b.4 GREEN `src/linear.ts`, `listChannels` in `src/slack.ts`, Channels page and POST handlers in `src/admin.ts`.
+- [x] 3b.1 RED `test/linear.test.ts` (fake `fetch`): `listProjects` query shape, `Authorization` without `Bearer`, TTL cache hit/expiry.
+- [x] 3b.2 RED `test/slack.test.ts`: `listChannels` cursor pagination, public + private, non-archived, `isMember`.
+- [x] 3b.3 RED `test/admin.test.ts`: refresh lists channels; link/unlink via POST (CSRF + Origin enforced, 403 cross-origin, 303 with flash); duplicate link no-op; Slack lookup failure shows an error and keeps stored list; joined vs "invite the bot" labels.
+- [x] 3b.4 GREEN `src/linear.ts`, `listChannels` in `src/slack.ts`, Channels page and POST handlers in `src/admin.ts`.
 - Verify: `pnpm test`, `pnpm typecheck`; manual on staging: link a project to `#test`, then run the slice 2b notification smoke test.
 
 ---
