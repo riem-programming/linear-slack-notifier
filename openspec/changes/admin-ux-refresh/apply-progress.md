@@ -114,3 +114,35 @@ Completed: 3a.1, 3a.2, 3a.3, 3a.4, 3a.5. Remaining: slices 3b through 5b.
 - `finishEvent` always writes `mentions` (`[]` when none). The app records mentions only when at least one target was notified; skipped or failed deliveries record `[]`.
 - Mention names use the stored person name first, then the payload name.
 - Migration 4 is additive and nullable; no UI change (that is 3b).
+
+### Review follow-up on slice 3a (commit be86b08)
+- `issue_url` is stored only when it is https on `linear.app` (or a subdomain) and at most 2048 characters; otherwise null.
+- Parsing of the stored `mentions` and `targets` JSON is guarded, so a corrupted row no longer breaks the event list.
+
+## Batch 6: Slice 3b (branch `feat/kamaiti-98-admin-estado-screen`, stacked on slice 3a, Linear KAMAITI-98)
+
+Completed: 3b.1, 3b.2, 3b.3. Remaining: slices 4a through 5b.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3b.1 | `test/admin-status.test.ts` | Unit (pure) | 352 existing | Written, failed (module missing) | 8/8 | counts sum to rows and zeros; midnight in Lima (04:30Z vs 05:00Z), Hoy/Ayer/es label, same instant is Hoy in Lima and Ayer in UTC, bad date, order kept | None needed |
+| 3b.2 | `test/admin.test.ts`, `test/admin-status.test.ts` | App and unit | 352 existing | Written, 8 failed | 363/363 | segments (50 cap both, unclassified only in Todos), search past newest 50, accents and case, segment honored, 300-char q cut to 100, q preserved in links, hostile q escaped, link only for https linear.app (7 bad URLs), mentions, legacy rows, hostile text, CSP guard | None needed |
+| 3b.3 | covered above | | | | `pnpm test` 363/363, `pnpm typecheck` clean | | `statusPage` moved from `admin.ts` to `admin-status.ts`; old table renderer, KINDS/OUTCOMES/REASONS removed from `admin.ts` |
+
+### Notes and deviations
+- The subtitle sits at the top of the page body (the shell renders only the large title).
+- Row markup hook is `<div class="ev" data-event>` inside the inset list item; old `<tr data-event>` tests were updated.
+- Issue link is rendered only for https on `linear.app` or a subdomain with no credentials (re-checked at render, stricter than the task's "http/https"); it opens with `rel="noopener noreferrer"` and `target="_blank"`.
+- A third empty state ("No hay avisos para mostrar") is kept for when only unclassified rows exist and Avisos is selected.
+- Failed rows show the Spanish reason plus every target with its error; notified rows show channels and "mencionó a ...".
+- `admin.ts` passes `now()` to the Estado page so "Hoy" and "Ayer" are testable with the injected clock.
+- No new runtime dependencies; CSS only in `admin.css`.
+
+### Review follow-up on slice 3b
+- Counters always render (0/0/0 on empty and no-match) with the caption "En los N eventos mostrados"; the empty state sits below them.
+- Failed targets read "#canal: falló" or "#canal: falló (error)"; notified targets are just "#canal".
+- Avisos with `q` and no results links to "Todos los eventos" with the same `q`.
+- `groupByDay`/`dayBefore` never throw on an invalid `now` or `received_at`; undated rows form one "Sin fecha" group at the end.
+- External issue links carry a visually hidden "(se abre en una pestaña nueva)" (`.sr-only`).
+- Tests: hostile `q` stays quoted in the field and escaped in the empty state; whitespace-only `q` is no search. `pnpm test` 367/367, `pnpm typecheck` clean.

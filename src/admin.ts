@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { statusPage } from "./admin-status.ts";
 import { serveAsset } from "./assets.ts";
 import { SESSION_SECRET_MIN_BYTES } from "./config.ts";
 import { checkOrigin, checkPassword, safeEqual } from "./auth.ts";
@@ -14,7 +15,7 @@ import { clientIp, createRateLimiter } from "./ratelimit.ts";
 import type { RateLimiter } from "./ratelimit.ts";
 import { SESSION_COOKIE, clearSessionCookie, csrfFor, readCookie, safeNext, sessionCookie, signSession, verifySession } from "./session.ts";
 import type { SlackApi } from "./slack.ts";
-import type { Channel, LoggedEvent, MatchSource, Person, Project, Store } from "./store.ts";
+import type { Channel, MatchSource, Person, Project, Store } from "./store.ts";
 import { button, emptyState, flash, pill } from "./ui.ts";
 import type { Tone } from "./ui.ts";
 
@@ -55,74 +56,10 @@ const safeDecode = (value: string): string => {
     return "";
   }
 };
-const OUTCOME_TONES: Record<string, Tone> = { notified: "success", skipped: "warning", failed: "error" };
 const MAX_FORM_BYTES = 100_000;
-const RECENT_EVENTS = 50;
-
-const KINDS: Record<string, string> = {
-  created: "Creada", assigned: "Asignada", completed: "Completada", canceled: "Cancelada", unclassified: "Sin clasificar",
-};
-const OUTCOMES: Record<string, string> = { notified: "Notificado", skipped: "Omitido", failed: "Fallido" };
-const REASONS: Record<string, string> = {
-  "no-project": "La incidencia no tiene proyecto",
-  "project-not-linked": "El proyecto no tiene un canal vinculado",
-  "assigned-at-create": "Ya se avisó al crear la incidencia",
-  "assignee-not-resolvable": "No se pudo identificar a la persona asignada",
-  "post-failed": "Falló el envío a Slack",
-  "internal-error": "Error interno",
-  "in-flight": "Envío en curso",
-  interrupted: "Envío interrumpido por un reinicio",
-  "not a notifiable event": "Cambio sin aviso (no es creación, asignación, cierre ni cancelación)",
-  "missing issue fields": "Faltan datos de la incidencia (identificador, título o enlace)",
-};
-
-const formatTime = (iso: string, timeZone: string): string => {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  // sv-SE yields an unambiguous "YYYY-MM-DD HH:mm:ss".
-  return new Intl.DateTimeFormat("sv-SE", { timeZone, dateStyle: "short", timeStyle: "medium" }).format(date);
-};
-
-const eventRow = (event: LoggedEvent, timeZone: string, channelName: (id: string) => string): Html => {
-  const issue = event.issueIdentifier
-    ? html`<strong>${event.issueIdentifier}</strong> ${event.issueTitle ?? ""}`
-    : html`<span class="muted">—</span>`;
-  const reason = event.reason ? (REASONS[event.reason] ?? event.reason) : "";
-  const targets = event.targets.length
-    ? html`<ul>${event.targets.map((t) => html`<li>${channelName(t.channel)}: ${OUTCOMES[t.outcome] ?? t.outcome}${t.error ? html` (${t.error})` : ""}</li>`)}</ul>`
-    : html`<span class="muted">—</span>`;
-  return html`<tr data-event>
-<td>${formatTime(event.receivedAt, timeZone)}</td>
-<td>${KINDS[event.kind] ?? event.kind}</td>
-<td>${issue}</td>
-<td>${pill(Object.hasOwn(OUTCOME_TONES, event.outcome) ? OUTCOME_TONES[event.outcome] as Tone : "neutral", OUTCOMES[event.outcome] ?? event.outcome)}</td>
-<td>${reason}</td>
-<td>${targets}</td>
-</tr>`;
-};
-
 type Page = (options: { title: string; current: NavKey; body: Html }) => Html;
 // Per-request view of the authenticated session: the render function embeds its logout CSRF token.
 type Ctx = { csrf: string; render: Page };
-
-const statusPage = (store: Store, timeZone: string, showAll: boolean, render: Page): Html => {
-  const events = store.recentEvents(RECENT_EVENTS, { hideUnclassified: !showAll });
-  const names = new Map(store.listChannels().map((channel) => [channel.id, channel.name]));
-  const channelName = (id: string): string => (names.has(id) ? `#${names.get(id)}` : id);
-  const toggle = showAll
-    ? html`<a href="/admin/status">Ocultar eventos sin clasificar</a>`
-    : html`<a href="/admin/status?all=1">Mostrar todos los eventos</a>`;
-  // Unclassified rows are still stored; the empty state must not claim there is nothing when they are only hidden.
-  const empty = !showAll && store.recentEvents(1).length ? "No hay eventos para mostrar." : "Aún no hay eventos registrados.";
-  const body = events.length
-    ? html`<p class="muted">${events.length === 1 ? "Último evento" : `Últimos ${events.length} eventos`}, del más reciente al más antiguo. Hora: ${timeZone}. ${toggle}</p>
-<div class="card"><table>
-<thead><tr><th scope="col">Hora</th><th scope="col">Tipo</th><th scope="col">Incidencia</th><th scope="col">Resultado</th><th scope="col">Motivo</th><th scope="col">Canales</th></tr></thead>
-<tbody>${events.map((event) => eventRow(event, timeZone, channelName))}</tbody>
-</table></div>`
-    : html`${emptyState(empty)}<p>${toggle}</p>`;
-  return render({ title: "Estado", current: "status", body });
-};
 
 // Flash messages come from a fixed table keyed by a query value: free text is never reflected.
 const FLASH: Record<string, { ok: boolean; text: string }> = {
@@ -282,7 +219,7 @@ export const createAdmin = ({ store, slack, linear, password, sessionSecret, tim
   const get = async (res: ServerResponse, path: string, search: URLSearchParams, ctx: Ctx): Promise<void> => {
     const route = path.replace(/\/+$/, "") || "/";
     if (route === "/admin") return redirect(res, "/admin/status", SECURITY_HEADERS);
-    if (route === "/admin/status") return page(res, 200, statusPage(store, timeZone, search.get("all") === "1", ctx.render));
+    if (route === "/admin/status") return page(res, 200, statusPage(store, { timeZone, now: now(), showAll: search.get("all") === "1", q: search.get("q") ?? "" }, ctx.render));
     if (route === "/admin/channels") return channels(res, search.get("status"), ctx);
     if (route === "/admin/people") return people(res, search.get("status"), ctx);
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);

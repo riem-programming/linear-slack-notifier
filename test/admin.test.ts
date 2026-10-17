@@ -456,7 +456,7 @@ test("status lists events newest first with Lima time, kind, issue, outcome, rea
     });
     const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
     assert.ok(text.indexOf("KAM-3") < text.indexOf("KAM-2") && text.indexOf("KAM-2") < text.indexOf("KAM-1"));
-    assert.match(text, /2026-10-17 10:04:05/);
+    assert.match(text, />10:04</);
     assert.match(text, /Creada/);
     assert.match(text, /Asignada/);
     assert.match(text, /Completada/);
@@ -466,6 +466,8 @@ test("status lists events newest first with Lima time, kind, issue, outcome, rea
     assert.match(text, /#test/);
     assert.match(text, /C2/);
     assert.doesNotMatch(text, /C1/);
+    assert.match(text, /Estado/);
+    assert.match(text, /Últimos eventos recibidos de Linear y qué pasó con cada uno\./);
     assert.match(text, /not_in_channel/);
     assert.match(text, /Notificado/);
   }));
@@ -475,7 +477,7 @@ test("status shows at most the 50 most recent events and falls back to the raw r
     for (let i = 1; i <= 55; i += 1) seedEvent(store, { issueIdentifier: `KAM-${i}` });
     seedEvent(store, { kind: "mystery", outcome: "skipped", reason: "weird-code", issueIdentifier: null, issueTitle: null });
     const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
-    assert.equal((text.match(/<tr data-event/g) ?? []).length, 50);
+    assert.equal((text.match(/<div class="ev" data-event/g) ?? []).length, 50);
     assert.match(text, /weird-code/);
     assert.match(text, /mystery/);
     assert.doesNotMatch(text, /KAM-1</);
@@ -858,13 +860,15 @@ test("status hides unclassified events by default and the toggle shows or hides 
     seedEvent(store, { kind: "unclassified", issueIdentifier: null, issueTitle: null, outcome: "skipped", reason: "not a notifiable event", targets: [] });
     seedEvent(store, { kind: "unclassified", issueIdentifier: null, issueTitle: null, outcome: "skipped", reason: "missing issue fields", targets: [] });
     const hidden = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
-    assert.equal((hidden.match(/<tr data-event/g) ?? []).length, 1);
-    assert.match(hidden, /Último evento/);
-    assert.match(hidden, /href="\/admin\/status\?all=1">Mostrar todos los eventos/);
+    assert.equal((hidden.match(/<div class="ev" data-event/g) ?? []).length, 1);
+    assert.match(hidden, /aria-current="true">Avisos</);
+    assert.match(hidden, /href="\/admin\/status\?all=1">Todos los eventos</);
+    assert.match(hidden, /stat-n">1<\/span><span class="stat-l">Notificados/);
     const shown = await (await fetch(`${base}/admin/status?all=1`, { headers: auth })).text();
-    assert.equal((shown.match(/<tr data-event/g) ?? []).length, 3);
-    assert.match(shown, /Últimos 3 eventos/);
-    assert.match(shown, /href="\/admin\/status">Ocultar eventos sin clasificar/);
+    assert.equal((shown.match(/<div class="ev" data-event/g) ?? []).length, 3);
+    assert.match(shown, /aria-current="true">Todos los eventos</);
+    assert.match(shown, /href="\/admin\/status">Avisos</);
+    assert.match(shown, /stat-n">2<\/span><span class="stat-l">Omitidos/);
     assert.match(shown, /Cambio sin aviso \(no es creación, asignación, cierre ni cancelación\)/);
     assert.match(shown, /Faltan datos de la incidencia/);
     assert.doesNotMatch(shown, /not a notifiable event|missing issue fields/);
@@ -874,10 +878,105 @@ test("status with only unclassified events explains they are hidden instead of c
   withApp(async ({ auth, base, store }) => {
     seedEvent(store, { kind: "unclassified", outcome: "skipped", reason: "not a notifiable event", targets: [] });
     const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
-    assert.match(text, /No hay eventos para mostrar/);
-    assert.match(text, /Mostrar todos los eventos/);
-    assert.equal((text.match(/<tr data-event/g) ?? []).length, 0);
+    assert.match(text, /No hay avisos para mostrar/);
+    assert.match(text, /Todos los eventos/);
+    assert.equal((text.match(/<div class="ev" data-event/g) ?? []).length, 0);
   }));
+
+const countRows = (text: string): number => (text.match(/<div class="ev" data-event/g) ?? []).length;
+
+test("status search finds old events past the newest 50, ignores accents and case, and honors the segment", () =>
+  withApp(async ({ auth, base, store }) => {
+    seedEvent(store, { issueIdentifier: "KAM-42", issueTitle: "Revisar Gestión de cuentas" });
+    seedEvent(store, { kind: "unclassified", issueIdentifier: "KAM-43", issueTitle: "Gestión oculta", outcome: "skipped", reason: "not a notifiable event", targets: [] });
+    for (let i = 1; i <= 60; i += 1) seedEvent(store, { issueIdentifier: `KAM-${100 + i}`, issueTitle: "Otro" });
+    const found = await (await fetch(`${base}/admin/status?q=GESTION`, { headers: auth })).text();
+    assert.equal(countRows(found), 1);
+    assert.match(found, /KAM-42/);
+    assert.match(found, /value="GESTION"/);
+    assert.equal(countRows(await (await fetch(`${base}/admin/status?q=gestion&all=1`, { headers: auth })).text()), 2);
+    assert.equal(countRows(await (await fetch(`${base}/admin/status?all=1`, { headers: auth })).text()), 50);
+    const none = await (await fetch(`${base}/admin/status?q=${encodeURIComponent("<b>zzz</b>")}`, { headers: auth })).text();
+    assert.match(none, /No hay resultados para «&lt;b&gt;zzz&lt;\/b&gt;»/);
+    assert.doesNotMatch(none, /<b>zzz/);
+    assert.equal(countRows(none), 0);
+    assert.match(none, /stat-n">0<\/span><span class="stat-l">Notificados/);
+    assert.match(none, /En los 0 eventos mostrados/);
+    assert.match(none, /Prueba buscar en <a href="\/admin\/status\?all=1&amp;q=%3Cb%3Ezzz%3C%2Fb%3E">Todos los eventos<\/a>/);
+  }));
+
+test("status always renders the counters with their scope caption, also with no events", () =>
+  withApp(async ({ auth, base, store }) => {
+    const empty = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
+    assert.match(empty, /stat-n">0<\/span><span class="stat-l">Fallidos/);
+    assert.ok(empty.indexOf("class=\"stats\"") < empty.indexOf("Aún no hay eventos"));
+    seedEvent(store);
+    seedEvent(store, { outcome: "failed", reason: "post-failed", targets: [] });
+    assert.match(await (await fetch(`${base}/admin/status`, { headers: auth })).text(), /En los 2 eventos mostrados/);
+    assert.doesNotMatch(await (await fetch(`${base}/admin/status?all=1&q=zzz`, { headers: auth })).text(), /Prueba buscar en/);
+  }));
+
+test("a hostile q stays escaped in the field and the empty state; a whitespace-only q is no search", () =>
+  withApp(async ({ auth, base, store }) => {
+    seedEvent(store);
+    const q = '" autofocus onfocus=x';
+    const text = await (await fetch(`${base}/admin/status?q=${encodeURIComponent(q)}`, { headers: auth })).text();
+    assert.match(text, /value="&quot; autofocus onfocus=x"/);
+    assert.match(text, /No hay resultados para «&quot; autofocus onfocus=x»/);
+    // The attribute stays quoted: the value is closed right before maxlength, so no new attribute can start inside it.
+    assert.match(text, /value="&quot; autofocus onfocus=x" maxlength="100"/);
+    assert.equal((text.match(/"/g) ?? []).length % 2, 0);
+    const blank = await (await fetch(`${base}/admin/status?q=${encodeURIComponent("   ")}`, { headers: auth })).text();
+    assert.equal(countRows(blank), 1);
+    assert.match(blank, /value=""/);
+    assert.doesNotMatch(blank, /No hay resultados/);
+    assert.match(blank, /href="\/admin\/status\?all=1">Todos los eventos/);
+  }));
+
+test("status search form and segment links preserve the query and the segment", () =>
+  withApp(async ({ auth, base }) => {
+    const text = await (await fetch(`${base}/admin/status?q=a%26b`, { headers: auth })).text();
+    assert.match(text, /<form method="get" action="\/admin\/status" role="search"/);
+    assert.match(text, /<label for="q">Buscar por ID o título<\/label>/);
+    assert.match(text, /placeholder="Buscar por ID \(KAM-88\) o título del ticket"/);
+    assert.match(text, /href="\/admin\/status\?all=1&amp;q=a%26b">Todos los eventos/);
+    assert.match(text, /aria-current="true">Avisos/);
+    const all = await (await fetch(`${base}/admin/status?all=1&q=x`, { headers: auth })).text();
+    assert.match(all, /<input type="hidden" name="all" value="1">/);
+    assert.match(all, /href="\/admin\/status\?q=x">Avisos/);
+    const long = await (await fetch(`${base}/admin/status?q=${"a".repeat(300)}`, { headers: auth })).text();
+    assert.match(long, new RegExp(`value="${"a".repeat(100)}"`));
+    assert.doesNotMatch(long, /a{101}/);
+  }));
+
+test("status shows the issue link only when stored, plus mentioned names, and legacy rows have neither", () =>
+  withApp(async ({ auth, base, store }) => {
+    const entry = { deliveryId: null, kind: "assigned", issueIdentifier: "KAM-7", issueTitle: "Con enlace", projectId: "p1", outcome: "notified" as const, reason: null, targets: [{ channel: "C1", outcome: "notified" as const }] };
+    const id = store.beginEvent({ ...entry, issueUrl: "https://linear.app/kamai/issue/KAM-7/con-enlace" });
+    store.finishEvent(id as number, { outcome: "notified", reason: null, targets: entry.targets, mentions: ["Ana Pérez", "Beto"] });
+    store.insertEvent({ ...entry, issueIdentifier: "KAM-6", issueTitle: "Sin enlace" });
+    const text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
+    assert.match(text, /<a href="https:\/\/linear\.app\/kamai\/issue\/KAM-7\/con-enlace"[^>]*>KAM-7<span class="sr-only"> \(se abre en una pestaña nueva\)<\/span><\/a>/);
+    assert.match(text, /Asignada · C1 · mencionó a Ana Pérez, Beto/);
+    assert.doesNotMatch(text, /<a href="[^"]*"[^>]*>KAM-6/);
+    assert.equal((text.match(/mencionó/g) ?? []).length, 1);
+    assertNoInlineCode(text);
+  }));
+
+test("status groups rows by day in the configured zone with Hoy and Ayer headers", async () => {
+  // The store clock is fixed at 2026-10-17T15:04Z (10:04 in Lima).
+  const header = async (now: string): Promise<string> => {
+    let text = "";
+    await withApp(async ({ auth, base, store }) => {
+      seedEvent(store);
+      text = await (await fetch(`${base}/admin/status`, { headers: auth })).text();
+    }, { now: () => Date.parse(now) });
+    return text;
+  };
+  assert.match(await header("2026-10-17T15:30:00.000Z"), /<h2 class="section-header">Hoy<\/h2>/);
+  assert.match(await header("2026-10-18T15:30:00.000Z"), /<h2 class="section-header">Ayer<\/h2>/);
+  assert.match(await header("2026-10-20T15:30:00.000Z"), /<h2 class="section-header">Sábado, 17 de octubre<\/h2>/);
+});
 
 test("people page hides deactivated people and a successful Linear read deactivates the ones that are gone", () =>
   withApp(async ({ auth, base, store }) => {
