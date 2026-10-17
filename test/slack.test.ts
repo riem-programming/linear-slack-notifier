@@ -66,3 +66,32 @@ test("postMessage backs off by a default delay when a 429 has no usable Retry-Af
     assert.deepEqual(waits, [1000]);
   }
 });
+
+const channelPage = (channels: { id: string; name: string; is_member: boolean }[], next = ""): Response =>
+  json({ ok: true, channels, response_metadata: { next_cursor: next } });
+
+test("listChannels asks for public and private non-archived channels with a bearer token", async () => {
+  const { fetch, calls } = fakeFetch(channelPage([{ id: "C1", name: "general", is_member: true }]));
+  const channels = await createSlackApi({ token: "xoxb-t", fetch }).listChannels();
+  assert.deepEqual(channels, [{ id: "C1", name: "general", isMember: true }]);
+  assert.match(calls[0]?.url ?? "", /^https:\/\/slack\.com\/api\/conversations\.list/);
+  const body = new URLSearchParams(calls[0]?.init.body as string);
+  assert.equal(body.get("types"), "public_channel,private_channel");
+  assert.equal(body.get("exclude_archived"), "true");
+  assert.equal((calls[0]?.init.headers as Record<string, string>).authorization, "Bearer xoxb-t");
+});
+
+test("listChannels follows cursors and maps membership", async () => {
+  const { fetch, calls } = fakeFetch(
+    channelPage([{ id: "C1", name: "a", is_member: true }], "next1"),
+    channelPage([{ id: "G2", name: "b", is_member: false }]),
+  );
+  const channels = await createSlackApi({ token: "t", fetch }).listChannels();
+  assert.deepEqual(channels.map((c) => [c.id, c.isMember]), [["C1", true], ["G2", false]]);
+  assert.equal(new URLSearchParams(calls[1]?.init.body as string).get("cursor"), "next1");
+});
+
+test("listChannels throws the Slack error code on ok:false", async () => {
+  const { fetch } = fakeFetch(json({ ok: false, error: "missing_scope" }));
+  await assert.rejects(createSlackApi({ token: "xoxb-secret", fetch }).listChannels(), { message: "missing_scope" });
+});
