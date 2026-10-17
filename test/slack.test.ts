@@ -21,7 +21,7 @@ test("postMessage sends a bearer-authenticated chat.postMessage request", async 
   const headers = calls[0]?.init.headers as Record<string, string>;
   assert.equal(headers.authorization, "Bearer xoxb-t");
   assert.match(headers["content-type"] as string, /^application\/json/);
-  assert.deepEqual(JSON.parse(calls[0]?.init.body as string), { channel: "C1", text: "hola" });
+  assert.deepEqual(JSON.parse(calls[0]?.init.body as string), { channel: "C1", text: "hola", unfurl_links: false, unfurl_media: false });
 });
 
 test("postMessage throws the Slack error on ok:false and never leaks the token", async () => {

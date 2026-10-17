@@ -79,7 +79,7 @@ export const createSlackApi = ({
 
   return {
     postMessage: async (channel, text) => {
-      await send("chat.postMessage", JSON.stringify({ channel, text }), "application/json; charset=utf-8", true);
+      await send("chat.postMessage", JSON.stringify({ channel, text, unfurl_links: false, unfurl_media: false }), "application/json; charset=utf-8", true);
     },
     listChannels,
     lookupUserByEmail: async (email) => {
