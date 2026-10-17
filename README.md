@@ -11,7 +11,7 @@ Operating it day to day: [docs/OPERATIONS.md](docs/OPERATIONS.md). Team GitHub a
 | Notifications | Linear `Issue` events become Slack notices: created, assigned, completed, canceled. Everything else is ignored. |
 | Mentions | People are matched to Slack users by email and mentioned with `@`. The actor is never mentioned. Unmatched people appear as plain names. |
 | Channel routing | Many-to-many: one project can post to several channels, and one channel can follow several projects. Changed at runtime in the admin panel. |
-| Status | `/estado [project]` and `@bot [project]` reply with a project summary: states, overdue, due in 7 days, completed this week, milestone progress. |
+| Status | `/estado-proyecto [project]` (name set by `SLACK_COMMAND_NAME`) and `@bot [project]` reply with a project summary: states, overdue, due in 7 days, completed this week, milestone progress. |
 | Admin panel | `/admin`: Estado (event log), Canales (project to channel links), Personas (Linear to Slack matching). |
 
 Slack texts are in Spanish. An issue with no project, or a project with no linked channel, is skipped and the reason shows on the Estado screen.
@@ -34,7 +34,7 @@ SQLite (`node:sqlite`) stores channels, projects, links, people and the event lo
 |-------|------|---------|
 | `POST /webhooks/linear` | Linear HMAC signature, max age 60 s | Issue events. Answers 200 even if Slack fails. |
 | `POST /slack/events` | Slack signature | URL verification and `app_mention`. |
-| `POST /slack/commands` | Slack signature | The `/estado` slash command. |
+| `POST /slack/commands` | Slack signature | The status slash command (`/estado-proyecto` in production). |
 | `/admin/*` | Password login, signed session cookie | Admin panel. Needs HTTPS. |
 | `GET /health` | none | `{ "status": "ok" }` |
 
@@ -56,6 +56,7 @@ The service exits at startup if a required variable is missing or invalid.
 | `BACKUP_KEEP` | no | `7` | Backups to keep (integer, 1 or more). |
 | `EVENT_LOG_RETENTION_DAYS` | no | `30` | Event log retention in days (1 or more). The log is also capped at 5,000 rows. |
 | `STATUS_TIME_ZONE` | no | `America/Lima` | IANA time zone for status dates and the admin. Invalid value: startup fails. |
+| `SLACK_COMMAND_NAME` | no | `/estado` | Slash command name shown in help replies, including the `@bot` mention help. Must match `^/[a-z0-9_-]{1,32}$` (case-insensitive) or startup fails. Set it to the command registered in Slack: `/estado-proyecto-dev` in staging, `/estado-proyecto` in production. |
 | `ADMIN_ENV_LABEL` | no | | Label in the admin sidebar, for example `Staging`. Cut to 40 characters. |
 
 ## Run locally
