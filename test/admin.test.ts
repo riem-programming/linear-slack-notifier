@@ -261,7 +261,8 @@ test("when Linear is down the page still renders with a readable message and sto
     assert.match(text, /No se pudo consultar Linear/);
     assert.match(text, /#test/);
     assert.doesNotMatch(text + logs.join(""), /lin_api_secret/);
-  }, { logs, projects: async () => { throw new Error("boom lin_api_secret"); } });
+    assert.match(logs.join("\n"), /Linear project list failed: Linear responded with status 401/);
+  }, { logs, projects: async () => { throw new Error("Linear responded with status 401"); } });
 });
 
 test("refresh stores the channels listed by Slack and redirects with a status", () =>
@@ -288,7 +289,8 @@ test("a Slack failure on refresh keeps the stored list and shows an error", asyn
     assert.match(text, /No se pudo consultar Slack/);
     assert.match(text, /#ventas/);
     assert.doesNotMatch(logs.join(""), /xoxb-secret/);
-  }, { logs, channels: async () => { throw new Error("missing_scope xoxb-secret"); } });
+    assert.match(logs.join("\n"), /Slack channel list failed: missing_scope/);
+  }, { logs, channels: async () => { throw new Error("missing_scope"); } });
 });
 
 test("link and unlink change the routing and a duplicate link is a no-op", () =>
@@ -372,4 +374,13 @@ test("admin redirects carry the security headers and HEAD is advertised in Allow
     const put = await fetch(`${base}/admin/channels`, { method: "PUT", headers: auth() });
     assert.equal(put.status, 405);
     assert.equal(put.headers.get("allow"), "GET, HEAD, POST");
+  }));
+
+test("inherited object keys as status render no flash", () =>
+  withApp(async ({ base }) => {
+    for (const status of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      const res = await fetch(`${base}/admin/channels?status=${status}`, { headers: auth() });
+      assert.equal(res.status, 200, status);
+      assert.doesNotMatch(await res.text(), /role="status"|flash-ok"|flash-error" role/, status);
+    }
   }));

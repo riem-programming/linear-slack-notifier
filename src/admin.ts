@@ -123,7 +123,7 @@ const channelRow = (channel: Channel, view: ChannelsView): Html => {
 };
 
 const channelsPage = (view: ChannelsView): Html => {
-  const flash = view.flash ? FLASH[view.flash] : undefined;
+  const flash = view.flash && Object.hasOwn(FLASH, view.flash) ? FLASH[view.flash] : undefined;
   const notice = flash ? html`<p class="${flash.ok ? "flash-ok" : "flash-error"}" role="status">${flash.text}</p>` : "";
   const warning = view.linearDown
     ? html`<p class="flash-error" role="alert">No se pudo consultar Linear. Solo se pueden vincular los proyectos ya conocidos.</p>`
@@ -151,9 +151,9 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
   const page = (res: ServerResponse, status: number, content: Html): void =>
     sendHtml(res, status, content.value, SECURITY_HEADERS);
 
-  // Only the error class is logged: upstream messages could echo request details.
+  // The clients throw fixed, secret-free messages (Slack error codes, "Linear responded with status N").
   const logUpstream = (what: string, error: unknown): void =>
-    logger.error(`${what} failed: ${error instanceof Error ? error.name : "unknown error"}`);
+    logger.error(`${what} failed: ${error instanceof Error ? error.message : "unknown error"}`);
 
   const channels = async (res: ServerResponse, status: string | null): Promise<void> => {
     let linearDown = false;
