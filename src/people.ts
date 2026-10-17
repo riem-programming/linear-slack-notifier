@@ -5,7 +5,7 @@ import type { MatchSource, Store } from "./store.ts";
 export type EmailLookup = (email: string) => Promise<string | null>;
 type PeopleStore = Pick<Store, "getPerson" | "upsertPerson">;
 
-export type SyncSummary = { auto: number; unmatched: number; manual: number; failed: number };
+export type SyncSummary = { auto: number; unmatched: number; manual: number; failed: number; stopped?: true };
 
 const SLACK_MEMBER_ID = /^[UW][A-Z0-9]+$/;
 export const isSlackMemberId = (value: string): boolean => SLACK_MEMBER_ID.test(value);
@@ -33,8 +33,13 @@ export const syncPeople = async (users: LinearUser[], lookup: EmailLookup, store
       const result = await match(email, lookup);
       store.upsertPerson({ linearUserId: id, name, email, ...result });
       summary[result.matchSource === "auto" ? "auto" : "unmatched"] += 1;
-    } catch {
+    } catch (error) {
       summary.failed += 1;
+      // A rate limit would only repeat for every remaining user: stop and let the admin retry later.
+      if (error instanceof Error && error.message.startsWith("ratelimited")) {
+        summary.stopped = true;
+        break;
+      }
     }
   }
   return summary;

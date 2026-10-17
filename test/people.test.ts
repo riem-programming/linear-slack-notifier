@@ -54,7 +54,7 @@ test("a lookup failure keeps the existing row, counts as failed and does not sto
   const store = setup();
   store.upsertPerson({ linearUserId: "u1", name: "Luis", email: "luis@kamailab.com", slackUserId: "ULUIS", matchSource: "auto" });
   const lookup = async (email: string): Promise<string | null> => {
-    if (email.startsWith("luis")) throw new Error("ratelimited");
+    if (email.startsWith("luis")) throw new Error("internal_error");
     return "UANA";
   };
   const summary = await syncPeople([user("u1", "Luis", "luis@kamailab.com"), user("u2", "Ana", "ana@x.com"), user("u3", "Nuevo", "nuevo@x.com")], async (e) => (e.startsWith("nuevo") ? Promise.reject(new Error("x")) : lookup(e)), store);
@@ -100,4 +100,35 @@ test("clearOverride keeps the manual mapping when Slack cannot be queried, and i
   assert.equal(store.getPerson("u1")?.matchSource, "manual");
   assert.equal(await clearOverride(store, "u2", lookup), "not-manual");
   assert.deepEqual(calls, []);
+});
+
+test("syncPeople stops at the first rate limit instead of hammering the remaining users", async () => {
+  const store = setup();
+  const calls: string[] = [];
+  const lookup = async (email: string): Promise<string | null> => {
+    calls.push(email);
+    if (email.startsWith("b")) throw new Error("ratelimited (Retry-After 30s)");
+    return "U1";
+  };
+  const users = ["a", "b", "c", "d"].map((n) => user(n, n.toUpperCase(), `${n}@x.com`));
+  const summary = await syncPeople(users, lookup, store);
+  assert.deepEqual(calls, ["a@x.com", "b@x.com"]);
+  assert.deepEqual(summary, { auto: 1, unmatched: 0, manual: 0, failed: 1, stopped: true });
+  assert.equal(store.getPerson("c"), null);
+});
+
+test("two Linear users sharing an email both match the same Slack user without crashing", async () => {
+  const store = setup();
+  const summary = await syncPeople([user("u1", "Luis", "shared@x.com"), user("u2", "Luis 2", "SHARED@x.com")], directory({ "shared@x.com": "USHARED" }).lookup, store);
+  assert.equal(summary.auto, 2);
+  assert.equal(store.getPerson("u1")?.slackUserId, "USHARED");
+  assert.equal(store.getPerson("u2")?.slackUserId, "USHARED");
+});
+
+test("setOverride rejects lowercase and whitespace-only ids", () => {
+  const store = setup();
+  store.upsertPerson({ linearUserId: "u1", name: "Luis", email: null, slackUserId: null, matchSource: "unmatched" });
+  assert.equal(setOverride(store, "u1", "u123abc"), "invalid");
+  assert.equal(setOverride(store, "u1", "   "), "invalid");
+  assert.equal(store.getPerson("u1")?.matchSource, "unmatched");
 });
