@@ -197,7 +197,7 @@ test("projectSnapshot sends one aggregated query and maps issues and milestones"
   const headers = calls[0]?.init.headers as Record<string, string>;
   assert.equal(headers.authorization, "lin_api_secret");
   const body = JSON.parse(calls[0]?.init.body as string) as { query: string; variables: { id: string; after: string | null } };
-  assert.deepEqual(body.variables, { id: "p1", after: null });
+  assert.deepEqual(body.variables, { id: "p1", after: null, withMilestones: true });
   for (const field of ["identifier", "dueDate", "completedAt", "position", "assignee", "projectMilestone", "projectMilestones", "pageInfo"]) {
     assert.match(body.query, new RegExp(field));
   }
@@ -268,4 +268,29 @@ test("projectSnapshot shares in-flight requests and replays a failure for 30 sec
 test("projectSnapshot rejects with a fixed message when the project does not exist", async () => {
   const { fetch } = fakeFetch(new Response(JSON.stringify({ data: { project: null } })));
   await assert.rejects(createLinearApi({ apiKey: "k", fetch }).projectSnapshot("nope"), { message: "Linear returned an unexpected response" });
+});
+
+test("projectSnapshot requests up to 100 milestones on the first page only", async () => {
+  const { fetch, calls } = fakeFetch(snapshotPage([issueNode(1)], "c1"), snapshotPage([issueNode(2)]));
+  await createLinearApi({ apiKey: "k", fetch }).projectSnapshot("p1");
+  const bodies = calls.map((call) => JSON.parse(call.init.body as string) as { query: string; variables: { withMilestones: boolean } });
+  assert.match(bodies[0]?.query ?? "", /projectMilestones\(first: 100\) @include\(if: \$withMilestones\)/);
+  assert.deepEqual(bodies.map((b) => b.variables.withMilestones), [true, false]);
+});
+
+test("projectSnapshot flags truncation when hasNextPage is true but the cursor is missing", async () => {
+  for (const cursor of [null, ""]) {
+    const response = new Response(
+      JSON.stringify({
+        data: { project: { id: "p1", name: "Web", issues: { nodes: [issueNode(1)], pageInfo: { hasNextPage: true, endCursor: cursor } } } },
+      }),
+    );
+    const { fetch, calls } = fakeFetch(response);
+    const warnings: string[] = [];
+    const snapshot = await createLinearApi({ apiKey: "k", fetch, logger: { warn: (m: string) => void warnings.push(m) } }).projectSnapshot("p1");
+    assert.equal(calls.length, 1);
+    assert.equal(snapshot.truncated, true);
+    assert.equal(snapshot.issues.length, 1);
+    assert.equal(warnings.length, 1);
+  }
 });

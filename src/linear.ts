@@ -51,11 +51,11 @@ const USERS_QUERY = `query Users($after: String) {
   users(first: 100, after: $after) { nodes { id name email active } pageInfo { hasNextPage endCursor } }
 }`;
 
-const SNAPSHOT_QUERY = `query ProjectSnapshot($id: String!, $after: String) {
+const SNAPSHOT_QUERY = `query ProjectSnapshot($id: String!, $after: String, $withMilestones: Boolean!) {
   project(id: $id) {
     id
     name
-    projectMilestones { nodes { id name sortOrder } }
+    projectMilestones(first: 100) @include(if: $withMilestones) { nodes { id name sortOrder } }
     issues(first: 100, after: $after) {
       nodes {
         identifier title dueDate completedAt
@@ -126,7 +126,7 @@ export const createLinearApi = ({ apiKey, fetch: fetchImpl = globalThis.fetch, n
     let name = "";
     let after: string | null = null;
     for (let pageNumber = 0; pageNumber < MAX_SNAPSHOT_PAGES; pageNumber += 1) {
-      const data: Record<string, unknown> = await post(SNAPSHOT_QUERY, { id, after });
+      const data: Record<string, unknown> = await post(SNAPSHOT_QUERY, { id, after, withMilestones: pageNumber === 0 });
       const project = data.project;
       const page = isRecord(project) && isRecord(project.issues) ? (project.issues as Connection) : null;
       if (!isRecord(project) || !page) throw new Error("Linear returned an unexpected response");
@@ -139,8 +139,9 @@ export const createLinearApi = ({ apiKey, fetch: fetchImpl = globalThis.fetch, n
         const issue = toIssue(node);
         if (issue) issues.push(issue);
       }
-      after = page.pageInfo?.hasNextPage ? (page.pageInfo.endCursor ?? null) : null;
-      if (after === null) return { id, name, issues, milestones, truncated: false };
+      if (!page.pageInfo?.hasNextPage) return { id, name, issues, milestones, truncated: false };
+      after = page.pageInfo.endCursor || null;
+      if (after === null) break; // more pages but no cursor to reach them: the list is incomplete
     }
     logger.warn(`Linear project issues truncated at ${MAX_SNAPSHOT_PAGES * 100}`);
     return { id, name, issues, milestones, truncated: true };
