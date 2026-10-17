@@ -10,6 +10,7 @@ export type Config = {
   backupKeep: number;
   eventLogRetentionDays: number;
   statusTimeZone: string;
+  adminEnvLabel: string | null;
 };
 
 type Env = Record<string, string | undefined>;
@@ -39,6 +40,10 @@ const timeZone = (env: Env, fallback: string): string => {
   return value;
 };
 
+const ENV_LABEL_MAX = 40;
+
+const envLabel = (env: Env): string | null => env.ADMIN_ENV_LABEL?.trim().slice(0, ENV_LABEL_MAX) || null;
+
 // SLACK_PROJECT_WEBHOOKS and SLACK_USER_MAP are legacy: they are never read here, so a stale value cannot break startup.
 export const loadConfig = (env: Env = process.env): Config => ({
   linearWebhookSecret: required(env, "LINEAR_WEBHOOK_SECRET"),
@@ -52,4 +57,5 @@ export const loadConfig = (env: Env = process.env): Config => ({
   backupKeep: integer(env, "BACKUP_KEEP", 7, 1),
   eventLogRetentionDays: integer(env, "EVENT_LOG_RETENTION_DAYS", 30, 1),
   statusTimeZone: timeZone(env, "America/Lima"),
+  adminEnvLabel: envLabel(env),
 });
