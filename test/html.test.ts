@@ -37,3 +37,9 @@ test("layout wraps content with navigation, marks the current page and escapes t
   assert.match(page, /<p>hola<\/p>/);
   assert.doesNotMatch(page, /<script/);
 });
+
+test("only html/raw output is trusted: a look-alike { value } object is escaped", () => {
+  const forged = { value: "<script>alert(1)</script>" };
+  assert.equal(html`<p>${forged}</p>`.value, "<p>[object Object]</p>");
+  assert.equal(html`<p>${[forged]}</p>`.value, "<p>[object Object]</p>");
+});

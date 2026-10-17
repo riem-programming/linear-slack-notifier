@@ -7,13 +7,16 @@ import { BodyTooLargeError, headerValue, parseJson, readBody, send } from "./htt
 import { isFresh, verifySignature } from "./signature.ts";
 import { planMentions, renderNotice, routeNotice } from "./notify.ts";
 import type { PersonLookup, RouteResult } from "./notify.ts";
+import type { LinearApi } from "./linear.ts";
 import type { SlackApi } from "./slack.ts";
 import type { EventEntry, Store } from "./store.ts";
 
 type AppOptions = {
   secret: string;
   store: Store;
-  slack: Pick<SlackApi, "postMessage">;
+  slack: Pick<SlackApi, "postMessage"> & Partial<Pick<SlackApi, "listChannels">>;
+  // Read-only Linear client for the admin Channels screen.
+  linear?: Pick<LinearApi, "listProjects">;
   // Unset or empty keeps the admin UI disabled (deny, never open).
   adminPassword?: string | undefined;
   timeZone?: string;
@@ -35,6 +38,7 @@ export const createApp = ({
   secret,
   store,
   slack,
+  linear,
   adminPassword,
   timeZone = "America/Lima",
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
@@ -153,7 +157,7 @@ export const createApp = ({
     runLater(() => processEvent(payload, deliveryId));
   };
 
-  const admin = createAdmin({ store, password: adminPassword, timeZone, logger });
+  const admin = createAdmin({ store, slack, linear, password: adminPassword, timeZone, logger });
 
   return createServer((req, res) => {
     const path = (req.url ?? "").split("?")[0] ?? "";

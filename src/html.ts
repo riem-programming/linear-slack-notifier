@@ -1,25 +1,27 @@
 // Safe HTML templating: interpolated values are escaped unless wrapped with `raw()` or produced by `html`.
-export type Html = { readonly value: string };
+// A class (not a structural type) so only values built by `html`/`raw` are trusted; a look-alike `{ value }` is escaped.
+export class Html {
+  readonly value: string;
+  constructor(value: string) {
+    this.value = value;
+  }
+}
 
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
 export const escapeHtml = (text: string): string => text.replace(/[&<>"']/g, (char) => ESCAPES[char] as string);
 
-export const raw = (value: string): Html => ({ value });
-
-const isHtml = (part: unknown): part is Html =>
-  typeof part === "object" && part !== null && "value" in part && typeof part.value === "string";
+export const raw = (value: string): Html => new Html(value);
 
 const render = (part: unknown): string => {
   if (part === null || part === undefined) return "";
   if (Array.isArray(part)) return part.map(render).join("");
-  if (isHtml(part)) return part.value;
+  if (part instanceof Html) return part.value;
   return escapeHtml(String(part));
 };
 
-export const html = (strings: TemplateStringsArray, ...parts: unknown[]): Html => ({
-  value: strings.reduce((out, text, index) => out + text + (index < parts.length ? render(parts[index]) : ""), ""),
-});
+export const html = (strings: TemplateStringsArray, ...parts: unknown[]): Html =>
+  new Html(strings.reduce((out, text, index) => out + text + (index < parts.length ? render(parts[index]) : ""), ""));
 
 export type NavKey = "channels" | "people" | "status";
 
@@ -42,6 +44,9 @@ th{background:#eaeef2}
 .outcome{font-weight:600}
 .notified{color:#1a7f37}.skipped{color:#9a6700}.failed{color:#cf222e}
 .muted{color:#57606a}
+.flash-ok{color:#1a7f37;font-weight:600}.flash-error{color:#cf222e;font-weight:600}
+.invite{color:#9a6700}.joined{color:#1a7f37}
+form{margin:.25rem 0}
 `;
 
 type LayoutOptions = { title: string; current: NavKey; body: Html };

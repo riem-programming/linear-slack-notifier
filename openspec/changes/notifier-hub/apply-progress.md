@@ -191,3 +191,43 @@ Mode: Strict TDD. Branch: `feat/kamaiti-78-admin-auth-status` (base `origin/deve
 
 ### Status
 Slice 3a: 4/4 tasks complete (28/28 across 1a-3a). Slices 3b-6 remain. Suite 140/140, typecheck clean.
+
+## Batch 6 - Slice 3b (Channels screen)
+
+Mode: Strict TDD. Branch: `feat/kamaiti-79-admin-channels` (base `origin/develop`, 1a-3a merged). Linear: KAMAITI-79.
+
+### Completed
+- [x] 3b.1 RED/GREEN `test/linear.test.ts` + `src/linear.ts` (`createLinearApi.listProjects`: raw key in `Authorization`, cursor pagination capped at 20 pages, 5-min TTL cache, failures not cached, fixed error strings, 5s timeout)
+- [x] 3b.2 RED/GREEN `test/slack.test.ts` + `listChannels` (conversations.list, public+private, non-archived, cursor pagination, `isMember`)
+- [x] 3b.3 RED `test/admin.test.ts` (empty state, lists, membership labels, Linear down, refresh, Slack down keeps stored list, link/unlink/duplicate/unknown, CSRF + Origin incl. cross-origin with valid token, escaping, flash allow-list)
+- [x] 3b.4 GREEN Channels page and POST handlers in `src/admin.ts`; `linear`/`slack.listChannels` wired through `src/app.ts` and `src/server.ts`
+- [x] Carry-over from 3a: `Html` is now a class (`instanceof` check) so `{ value }` look-alikes are escaped; admin redirect sends `SECURITY_HEADERS` (`redirect` takes optional headers); 405 `Allow: GET, HEAD, POST`
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-----|-----|-----|
+| 3b.1 | `test/linear.test.ts` | Unit (fake fetch) | 140/140 | Failed (module missing) | Passed | query shape, pages, TTL edge (299,999 vs +2 ms), 401, GraphQL errors, no key leak, signal | Clean |
+| 3b.2 | `test/slack.test.ts` | Unit (fake fetch) | 140/140 | Failed (method missing) | 148/148 | request params, 2 pages, ok:false | `send` generalized (content type, returns parsed result) |
+| html brand | `test/html.test.ts` | Unit | 148/148 | 1 failing (verified by reverting src) | 149/149 | scalar and array forms | Clean |
+| 3b.3-3b.4 + carry-overs | `test/admin.test.ts` | Integration (ephemeral server, fake ports) | 149/149 | 11 failing | 162/162 | see list above | Clean |
+
+### Deviations from design/tasks
+- Linear projects are pulled into the store on each Channels GET (through the 5-min cache) rather than on the refresh POST; the link select is built from the store, so it still works from stored data when Linear is down. The POST refresh only syncs Slack channels.
+- Refresh upserts only: channels no longer returned by Slack (archived/removed) stay in the store with their links (nothing is deleted automatically).
+- Flash is an allow-listed status code in the query (`?status=linked`), never free text.
+- CSRF token is rendered by `createAdmin` itself (internal `csrfToken(csrfSecret)`); no new export was needed. Tests scrape the token from the page.
+- `slack.listChannels` and `linear` are optional on `AppOptions` (missing port = upstream reported unavailable) so `test/app.test.ts` stays untouched.
+- Slack `conversations.list` is called as form-urlencoded POST (JSON bodies are not reliably accepted by read methods).
+- Admin logs only the error class for Linear/Slack failures.
+- Size: 533 additions + 34 deletions excl. openspec (~567), above the ~400 budget (tests ~250). Natural boundaries are the four feature commits.
+
+### Status
+Slice 3b: 4/4 tasks complete (32/32 across 1a-3b). Slices 3c-6 remain. Suite 162/162, typecheck clean.
+
+### Batch 6b - Review fixes on slice 3b (strict TDD, tests first)
+- Flash lookup uses `Object.hasOwn`: `?status=constructor|__proto__|toString|hasOwnProperty` renders no flash.
+- `listProjects` shares one in-flight promise (concurrent calls fetch once) and replays a failure for 30s (no repeated 5s waits during an outage); success clears it. Cache TTL tests unchanged.
+- Admin logs the client error message (fixed secret-free strings: Slack error codes, `Linear responded with status N`) instead of the class name; tests assert the message is logged and no token/key appears.
+- Linear logs a warning when the 20-page cap truncates the list; nodes without non-empty string `id` and `name` are skipped.
+- Decision D12 (design.md): refresh only upserts. Channels archived/deleted in Slack keep their links until unlinked manually; posts to them are logged as failed (`channel_not_found` / `is_archived`). No schema change in this slice. Follow-up 6.1b added to tasks.md for `docs/OPERATIONS.md`.
+- Suite 167/167, typecheck clean.

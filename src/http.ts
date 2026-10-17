@@ -47,8 +47,8 @@ export const sendHtml = (
 };
 
 // Post/Redirect/Get: 303 forces the browser to follow with a GET.
-export const redirect = (res: ServerResponse, location: string): void => {
-  res.writeHead(303, { location });
+export const redirect = (res: ServerResponse, location: string, headers: Record<string, string> = {}): void => {
+  res.writeHead(303, { location, ...headers });
   res.end();
 };
 
