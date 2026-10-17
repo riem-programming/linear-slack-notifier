@@ -145,10 +145,10 @@ Checklist:
 - Linear ticket: "Panel de administracion: autenticacion y pantalla de estado" - Proteger el panel con Basic Auth y CSRF y mostrar los eventos recientes con su resultado y motivo.
 
 Checklist:
-- [ ] 3a.1 RED `test/html.test.ts`: tagged template escapes by default (hostile name), `raw()` opt-out, `layout()`.
-- [ ] 3a.2 RED `test/auth.test.ts`: `checkBasicAuth` (none, wrong, unset password, valid; constant-time), `csrfToken`, `checkOrigin` (match/mismatch/missing).
-- [ ] 3a.3 RED `test/admin.test.ts`: 401 without credentials on `/admin*`; `/health` unaffected; security headers (`X-Frame-Options`, CSP, `no-store`); Status page lists recent 50 with skipped reason; upstream error shows no secrets.
-- [ ] 3a.4 GREEN `src/html.ts`, `src/auth.ts`, Status page in `src/admin.ts`, route wiring in `src/app.ts`.
+- [x] 3a.1 RED `test/html.test.ts`: tagged template escapes by default (hostile name), `raw()` opt-out, `layout()`.
+- [x] 3a.2 RED `test/auth.test.ts`: `checkBasicAuth` (none, wrong, unset password, valid; constant-time), `csrfToken`, `checkOrigin` (match/mismatch/missing).
+- [x] 3a.3 RED `test/admin.test.ts`: 401 without credentials on `/admin*`; `/health` unaffected; security headers (`X-Frame-Options`, CSP, `no-store`); Status page lists recent 50 with skipped reason; upstream error shows no secrets.
+- [x] 3a.4 GREEN `src/html.ts`, `src/auth.ts`, Status page in `src/admin.ts`, route wiring in `src/app.ts`.
 - Verify: `pnpm test`, `pnpm typecheck`.
 
 ---
