@@ -30,3 +30,12 @@ Mode: Strict TDD. Branch: `feat/1a-persistence-db-store` (base `origin/develop`)
 
 ### Status
 6/6 tasks of slice 1a complete. Slices 1b-6 remain.
+
+## Batch 1b - Review fixes on slice 1a (strict TDD, test first)
+
+| Fix | Test | RED | GREEN |
+|-----|------|-----|-------|
+| `migrate` rejects `user_version` newer than known migrations (`Database schema version N is newer than this build supports (M)`) | `test/db.test.ts` | Failed before change | Passed |
+| `backup` does `VACUUM INTO <target>.tmp` then `renameSync`; temp removed on failure; previous same-day snapshot survives (closed-db failure injection); UTC comment added | `test/db.test.ts` | Failed before change (old backup lost) | Passed |
+
+Suite: 89/89 pass, typecheck clean. Delivery: single PR with `size:exception` (user-approved).
