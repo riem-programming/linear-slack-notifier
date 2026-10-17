@@ -23,6 +23,7 @@ test("loads required secrets and applies defaults", () => {
     backupKeep: 7,
     eventLogRetentionDays: 30,
     statusTimeZone: "America/Lima",
+    adminEnvLabel: null,
   });
 });
 
@@ -68,4 +69,12 @@ test("legacy SLACK_PROJECT_WEBHOOKS and SLACK_USER_MAP are ignored, even when ma
   const config = loadConfig({ ...base, SLACK_PROJECT_WEBHOOKS: "{nope", SLACK_USER_MAP: "[]" });
   assert.equal("slackProjectWebhooks" in config, false);
   assert.equal("slackUserMap" in config, false);
+});
+
+test("adminEnvLabel is trimmed, cut to 40 characters and null when unset or blank", () => {
+  assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "  Staging " }).adminEnvLabel, "Staging");
+  assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "x".repeat(60) }).adminEnvLabel, "x".repeat(40));
+  assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "   " }).adminEnvLabel, null);
+  assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "" }).adminEnvLabel, null);
+  assert.equal(loadConfig(base).adminEnvLabel, null);
 });

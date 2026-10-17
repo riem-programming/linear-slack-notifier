@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { serveAsset } from "./assets.ts";
 import { checkBasicAuth, checkOrigin, csrfToken, verifyCsrf } from "./auth.ts";
 import { BodyTooLargeError, parseForm, readBody, redirect, send, sendHtml } from "./http.ts";
 import { html, layout } from "./html.ts";
@@ -21,12 +22,26 @@ type AdminOptions = {
   csrfSecret?: string;
 };
 
+// No 'unsafe-inline': templates must never emit style attributes, style tags or inline scripts.
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self'", "img-src 'self'", "connect-src 'self'",
+  "form-action 'self'", "frame-ancestors 'none'", "base-uri 'none'", "object-src 'none'",
+].join("; ");
+
 const SECURITY_HEADERS = {
   "cache-control": "no-store",
   "x-frame-options": "DENY",
   "x-content-type-options": "nosniff",
-  "content-security-policy": "default-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  "content-security-policy": CSP,
   "referrer-policy": "same-origin",
+};
+const ASSETS_PREFIX = "/admin/assets/";
+const safeDecode = (value: string): string => {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return "";
+  }
 };
 const MAX_FORM_BYTES = 100_000;
 const RECENT_EVENTS = 50;
@@ -324,6 +339,11 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
 
   return async (req: IncomingMessage, res: ServerResponse, path: string): Promise<void> => {
     if (!password) return send(res, 403, { error: "admin disabled" }, SECURITY_HEADERS);
+    // Static assets carry no admin data, so they are served before authentication.
+    if (path.startsWith(ASSETS_PREFIX) && (req.method === "GET" || req.method === "HEAD")) {
+      const version = new URL(req.url ?? "", "http://localhost").searchParams.get("v");
+      return serveAsset(res, safeDecode(path.slice(ASSETS_PREFIX.length)), version);
+    }
     if (!checkBasicAuth(req.headers.authorization, password)) {
       return send(res, 401, { error: "unauthorized" }, { ...SECURITY_HEADERS, "www-authenticate": 'Basic realm="Notifier Hub", charset="UTF-8"' });
     }

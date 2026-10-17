@@ -115,6 +115,39 @@ test("valid credentials: /admin redirects to status, other pages render with sec
     assert.equal((await fetch(`${base}/admin/unknown`, { headers: auth() })).status, 404);
   }));
 
+const CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
+  "form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
+
+test("admin pages send the strict CSP without unsafe-inline", () =>
+  withApp(async ({ base }) => {
+    for (const path of ["/admin/status", "/admin/channels", "/admin/people"]) {
+      const csp = (await fetch(`${base}${path}`, { headers: auth() })).headers.get("content-security-policy");
+      assert.equal(csp, CSP, path);
+      assert.doesNotMatch(csp ?? "", /unsafe-inline/);
+    }
+    const denied = await fetch(`${base}/admin/status`);
+    assert.equal(denied.headers.get("content-security-policy"), CSP);
+  }));
+
+test("assets are served without credentials, before auth, with cache headers", () =>
+  withApp(async ({ base }) => {
+    const css = await fetch(`${base}/admin/assets/admin.css?v=x`);
+    assert.equal(css.status, 200);
+    assert.equal(css.headers.get("cache-control"), "no-cache");
+    assert.match(css.headers.get("content-type") ?? "", /^text\/css/);
+    assert.equal((await fetch(`${base}/admin/assets/admin.js`)).status, 200);
+    assert.equal((await fetch(`${base}/admin/assets/nope.css`)).status, 404);
+    assert.equal((await fetch(`${base}/admin/assets/a%2Fb.css`)).status, 404);
+    assert.equal((await fetch(`${base}/admin/assets/`)).status, 404);
+    assert.equal((await fetch(`${base}/admin/assets/admin.css`, { method: "POST" })).status, 401);
+  }));
+
+test("assets answer 403 when the admin is disabled", () =>
+  withApp(async ({ base }) => {
+    assert.equal((await fetch(`${base}/admin/assets/admin.css`)).status, 403);
+  }, { adminPassword: undefined }));
+
 test("status page shows an empty state when there are no events", () =>
   withApp(async ({ base }) => {
     const text = await (await fetch(`${base}/admin/status`, { headers: auth() })).text();
