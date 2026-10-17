@@ -4,7 +4,11 @@ const DEFAULT_BACKOFF_SECONDS = 1;
 
 export type SlackApi = {
   // Throws on ok:false (the Slack error code is the message); retries once on 429 when Retry-After <= 5s.
-  postMessage: (channel: string, text: string) => Promise<void>;
+  postMessage: (channel: string, text: string, threadTs?: string) => Promise<void>;
+  // Visible only to `user` in `channel`.
+  postEphemeral: (channel: string, user: string, text: string, threadTs?: string) => Promise<void>;
+  // Replies through a Slack-issued response_url (https://hooks.slack.com only); needs no channel membership.
+  respond: (responseUrl: string, text: string, visibility: "in_channel" | "ephemeral") => Promise<void>;
   // Cursor-paginated; public and private non-archived channels the bot token can see.
   listChannels: () => Promise<SlackChannel[]>;
   // Returns the member id for an email, or null when Slack has no such user (users_not_found).
@@ -77,9 +81,31 @@ export const createSlackApi = ({
     return channels;
   };
 
+  const json = "application/json; charset=utf-8";
   return {
-    postMessage: async (channel, text) => {
-      await send("chat.postMessage", JSON.stringify({ channel, text, unfurl_links: false, unfurl_media: false }), "application/json; charset=utf-8", true);
+    postMessage: async (channel, text, threadTs) => {
+      await send("chat.postMessage", JSON.stringify({ channel, text, ...(threadTs ? { thread_ts: threadTs } : {}), unfurl_links: false, unfurl_media: false }), json, true);
+    },
+    postEphemeral: async (channel, user, text, threadTs) => {
+      await send("chat.postEphemeral", JSON.stringify({ channel, user, text, ...(threadTs ? { thread_ts: threadTs } : {}), unfurl_links: false, unfurl_media: false }), json, true);
+    },
+    respond: async (responseUrl, text, visibility) => {
+      // SSRF guard: the URL comes from the request body, so only Slack's own host is allowed.
+      const url = URL.canParse(responseUrl) ? new URL(responseUrl) : null;
+      if (!url || url.protocol !== "https:" || url.hostname !== "hooks.slack.com" || url.port || url.username || url.password) {
+        throw new Error("invalid response_url");
+      }
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers: { "content-type": json },
+        body: JSON.stringify({ text, response_type: visibility, unfurl_links: false, unfurl_media: false }),
+        redirect: "error",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        throw new Error(`response_url responded with status ${response.status}`);
+      }
     },
     listChannels,
     lookupUserByEmail: async (email) => {

@@ -3,8 +3,9 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createAdmin, isAdminPath } from "./admin.ts";
 import { classifyEvent } from "./events.ts";
 import type { Ignored, IssueNotice } from "./events.ts";
-import { BodyTooLargeError, headerValue, parseJson, readBody, send } from "./http.ts";
-import { isFresh, verifySignature } from "./signature.ts";
+import type { Bot } from "./bot.ts";
+import { BodyTooLargeError, headerValue, parseForm, parseJson, readBody, send } from "./http.ts";
+import { isFresh, verifySignature, verifySlackSignature } from "./signature.ts";
 import { planMentions, renderNotice, routeNotice } from "./notify.ts";
 import type { PersonLookup, RouteResult } from "./notify.ts";
 import type { LinearApi } from "./linear.ts";
@@ -19,6 +20,9 @@ type AppOptions = {
   linear?: Partial<Pick<LinearApi, "listProjects" | "listUsers">>;
   // Unset or empty keeps the admin UI disabled (deny, never open).
   adminPassword?: string | undefined;
+  // Slack inbound routes (/slack/events, /slack/commands) exist only when both are provided.
+  slackSigningSecret?: string | undefined;
+  bot?: Bot | undefined;
   timeZone?: string;
   maxBodyBytes?: number;
   now?: () => number;
@@ -40,6 +44,8 @@ export const createApp = ({
   slack,
   linear,
   adminPassword,
+  slackSigningSecret,
+  bot,
   timeZone = "America/Lima",
   maxBodyBytes = DEFAULT_MAX_BODY_BYTES,
   now = Date.now,
@@ -121,10 +127,10 @@ export const createApp = ({
     }
   };
 
-  const handleWebhook = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    let raw: Buffer;
+  // Reads the raw body; answers 413/400 itself and returns null when it cannot.
+  const readRaw = async (req: IncomingMessage, res: ServerResponse): Promise<Buffer | null> => {
     try {
-      raw = await readBody(req, maxBodyBytes);
+      return await readBody(req, maxBodyBytes);
     } catch (error) {
       if (error instanceof BodyTooLargeError) {
         req.resume();
@@ -133,8 +139,13 @@ export const createApp = ({
       } else {
         send(res, 400, { error: "could not read body" });
       }
-      return;
+      return null;
     }
+  };
+
+  const handleWebhook = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+    const raw = await readRaw(req, res);
+    if (!raw) return;
 
     const signature = headerValue(req.headers["linear-signature"]);
     if (signature === null || !verifySignature(raw, signature, secret)) {
@@ -158,6 +169,64 @@ export const createApp = ({
     runLater(() => processEvent(payload, deliveryId));
   };
 
+  // Verifies the Slack v0 signature over the raw body; answers 401 itself and returns null when invalid.
+  const readSlack = async (req: IncomingMessage, res: ServerResponse): Promise<string | null> => {
+    const raw = await readRaw(req, res);
+    if (!raw) return null;
+    const timestamp = headerValue(req.headers["x-slack-request-timestamp"]) ?? undefined;
+    const signature = headerValue(req.headers["x-slack-signature"]) ?? undefined;
+    if (!slackSigningSecret || !verifySlackSignature(raw, timestamp, signature, slackSigningSecret, now())) {
+      send(res, 401, { error: "invalid signature" });
+      return null;
+    }
+    return raw.toString("utf8");
+  };
+
+  // Background Slack work must never reject, whatever `defer` does with the task; only the message is logged (no URLs, no secrets).
+  const safely = (label: string, task: () => Promise<void>): void =>
+    runLater(async () => {
+      try {
+        await task();
+      } catch (error) {
+        logger.error(`${label} failed: ${errorMessage(error)}`);
+      }
+    });
+
+  const handleSlackEvents = async (req: IncomingMessage, res: ServerResponse, current: Bot): Promise<void> => {
+    const body = await readSlack(req, res);
+    if (body === null) return;
+    const payload = parseJson(body) as { type?: unknown; challenge?: unknown; event?: Record<string, unknown> } | null;
+    if (payload?.type === "url_verification" && typeof payload.challenge === "string") {
+      send(res, 200, { challenge: payload.challenge });
+      return;
+    }
+    send(res, 200);
+    const event = payload?.type === "event_callback" ? payload.event : undefined;
+    // Slack retries slow deliveries (X-Slack-Retry-Num); the first one is already being handled.
+    if (headerValue(req.headers["x-slack-retry-num"]) !== null || !event || event.bot_id !== undefined || event.type !== "app_mention") return;
+    const { channel, user, text, thread_ts: threadTs } = event;
+    if (typeof channel !== "string" || typeof user !== "string" || typeof text !== "string") return;
+    safely("Mention", () => current.mention({ text, channel, user, threadTs: typeof threadTs === "string" ? threadTs : undefined }));
+  };
+
+  const handleSlackCommand = async (req: IncomingMessage, res: ServerResponse, current: Bot): Promise<void> => {
+    const body = await readSlack(req, res);
+    if (body === null) return;
+    const fields = parseForm(body);
+    const { text = "", channel_id: channelId, response_url: responseUrl, command } = fields;
+    if (!channelId || !responseUrl) {
+      send(res, 400, { error: "invalid command" });
+      return;
+    }
+    send(res, 200);
+    safely("Command", () => current.command({ text, channelId, responseUrl, command }));
+  };
+
+  const slackRoutes = new Map([
+    ["/slack/events", handleSlackEvents],
+    ["/slack/commands", handleSlackCommand],
+  ]);
+
   const admin = createAdmin({ store, slack, linear, password: adminPassword, timeZone, logger });
 
   return createServer((req, res) => {
@@ -173,6 +242,14 @@ export const createApp = ({
     if (req.method === "POST" && path === "/webhooks/linear") {
       handleWebhook(req, res).catch((error: unknown) => {
         logger.error(`Unhandled webhook error: ${errorMessage(error)}`);
+        if (!res.headersSent) send(res, 500, { error: "internal error" });
+      });
+      return;
+    }
+    const slackRoute = req.method === "POST" && bot && slackSigningSecret ? slackRoutes.get(path) : undefined;
+    if (slackRoute && bot) {
+      slackRoute(req, res, bot).catch((error: unknown) => {
+        logger.error(`Unhandled slack error: ${errorMessage(error)}`);
         if (!res.headersSent) send(res, 500, { error: "internal error" });
       });
       return;

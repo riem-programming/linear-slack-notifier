@@ -319,3 +319,37 @@ Slice 4a: 4/4 tasks complete (41/41 across 1a-4a). Slices 4b-6 remain. Suite 233
 - "Due this week" became "due soon": today through today+6 inclusive in `STATUS_TIME_ZONE` (summary field `dueSoon`), heading "📅 Vencen en los próximos 7 días (N)". Tests: Friday includes next Thursday, Sunday includes next Saturday and excludes next Sunday, today+6 included and today+7 excluded, year boundary. design.md, status-query spec and tasks.md wording updated.
 - NOTE FOR 4b: the status message is a link-heavy text, so 4b MUST post it with unfurls disabled (`unfurl_links: false`, `unfurl_media: false` on `chat.postMessage` and `chat.postEphemeral`; for `response_url` replies send the same two fields in the JSON body).
 - Suite 238/238, typecheck clean.
+
+## Batch 9 - Slice 4b (Bot endpoints: slash command + app_mention)
+
+Mode: Strict TDD. Branch: `feat/kamaiti-82-bot-endpoints` (base `origin/develop`, 1a-4a merged). Linear: KAMAITI-82.
+
+### Completed
+- [x] 4b.1 RED/GREEN `test/app.test.ts`: signature 401 (missing/bad/stale) on both routes, `url_verification` echo, ack before deferred work, retries (`X-Slack-Retry-Num`), `bot_id` and non-mention events ignored, empty 200 for commands, 400 without `response_url`/`channel_id`, failing bot never rejects, 404 when not configured
+- [x] 4b.2 RED/GREEN `test/bot.test.ts` + `src/bot.ts`: D3 decision table, `parseMention`, escaping, Linear error -> ephemeral Spanish message
+- [x] 4b.3 RED/GREEN `test/slack.test.ts`: `postEphemeral`, `postMessage` thread_ts, `respond` (unfurls off, no bearer token, host guard, non-2xx)
+- [x] 4b.4 GREEN `src/slack.ts`, `src/bot.ts`, routes in `src/app.ts`, wiring in `src/server.ts`
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 4b.3 | `test/slack.test.ts` | Unit (fake fetch) | 238/238 | 5 failing (methods missing) | 243/243 | thread/no thread, 6 forbidden URL shapes, 404 | Clean |
+| 4b.2 | `test/bot.test.ts` | Unit (real store, fake ports) | 243/243 | Failed (module missing) | 254/254 | named/linked/unlinked/unknown/ambiguous, escaping, Linear down, mention variants | Test logger typed |
+| 4b.1 | `test/app.test.ts` | Integration (ephemeral server, fake bot, collecting defer) | 254/254 | 8 failing | 263/263 | 3 signature failure forms x 2 routes, retry/bot_id/type/shape | `readRaw` extracted and shared with the Linear webhook |
+
+### Deviations from design/tasks
+- `AppOptions` takes `bot` + `slackSigningSecret` (optional; routes answer 404 when absent) instead of the whole `Config`/`SlackApi`/`LinearApi`; the logic lives in `createBot` (`src/bot.ts`), composed in `server.ts`. `defer` already existed (2b), so `server.ts` needs no production defer.
+- Events and commands are not written to the event log (log lines only: `Mention failed: ...` / `Command failed: ...` carry the error message, never the response_url).
+- `respond` validates `https://hooks.slack.com` (no port, no credentials), uses `redirect: "error"`, 5s timeout, and throws a generic `invalid response_url`.
+- `postMessage` got an optional `threadTs`; a mention inside a thread replies in that thread, otherwise in the channel.
+- Help/errors for `@bot` use `chat.postEphemeral` to the mentioning user; slash replies use `response_url` with `response_type` in_channel or ephemeral. All outgoing bodies carry `unfurl_links: false`, `unfurl_media: false`.
+- Linear failures (list or snapshot) return one generic Spanish ephemeral message; the fixed client message goes to `logger.warn`.
+- Mention retries are dropped by the `X-Slack-Retry-Num` header only (no event_id dedupe store).
+- Size: 472 insertions + 11 deletions vs origin/develop (src+test, excl. openspec), slightly above ~400 (tests ~270). Boundaries: slack client / bot logic / routes.
+
+### Status
+Slice 4b: 4/4 tasks complete (45/45 across 1a-4b). Slices 5-6 remain. Suite 263/263, typecheck clean.
+
+### Batch 9b - Review fixes on slice 4b (strict TDD, tests first)
+- `parseMention` decodes `&lt; &gt; &amp;` after stripping `<@U..>` (no double escaping); slack routes use a `Map`; `postEphemeral` takes `threadTs`; `respond` cancels the body on non-2xx; help names the payload `command` (validated `^/[a-z0-9_-]{1,32}$`, fallback `/estado`, also for mentions).
+- Suite 269/269, typecheck clean. Size vs origin/develop (src+test): 540 insertions, 11 deletions.
