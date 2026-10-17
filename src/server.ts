@@ -56,6 +56,7 @@ const start = (): void => {
     secret: config.linearWebhookSecret,
     store,
     adminPassword: config.adminPassword,
+    sessionSecret: config.sessionSecret,
     adminEnvLabel: config.adminEnvLabel,
     timeZone: config.statusTimeZone,
     slack,

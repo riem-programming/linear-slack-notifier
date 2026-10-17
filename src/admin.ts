@@ -1,14 +1,18 @@
-import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { serveAsset } from "./assets.ts";
-import { checkBasicAuth, checkOrigin, csrfToken, verifyCsrf } from "./auth.ts";
+import { SESSION_SECRET_MIN_BYTES } from "./config.ts";
+import { checkOrigin, checkPassword, safeEqual } from "./auth.ts";
 import { BodyTooLargeError, parseForm, readBody, redirect, send, sendHtml } from "./http.ts";
 import { html } from "./html.ts";
 import type { Html } from "./html.ts";
 import { bare, shell } from "./layout.ts";
 import type { NavKey } from "./layout.ts";
 import type { LinearApi } from "./linear.ts";
+import { loginPage } from "./login.ts";
 import { clearOverride, deactivateMissing, reactivateReturning, setOverride, syncPeople } from "./people.ts";
+import { clientIp, createRateLimiter } from "./ratelimit.ts";
+import type { RateLimiter } from "./ratelimit.ts";
+import { SESSION_COOKIE, clearSessionCookie, csrfFor, readCookie, safeNext, sessionCookie, signSession, verifySession } from "./session.ts";
 import type { SlackApi } from "./slack.ts";
 import type { Channel, LoggedEvent, MatchSource, Person, Project, Store } from "./store.ts";
 import { button, emptyState, flash, pill } from "./ui.ts";
@@ -19,11 +23,13 @@ type AdminOptions = {
   // Optional ports: when missing, the matching upstream is reported as unavailable.
   slack?: Partial<Pick<SlackApi, "listChannels" | "lookupUserByEmail">> | undefined;
   linear?: Partial<Pick<LinearApi, "listProjects" | "listUsers">> | undefined;
-  // Unset or empty disables the admin entirely.
+  // An unset or empty password, or a missing session secret, disables the admin entirely.
   password: string | undefined;
+  sessionSecret: string | null | undefined;
   timeZone: string;
   logger: Pick<Console, "error" | "warn">;
-  csrfSecret?: string;
+  limiter?: RateLimiter;
+  now?: () => number;
   // Shown in the sidebar when set (for example "Staging").
   envLabel?: string | null;
 };
@@ -96,6 +102,8 @@ const eventRow = (event: LoggedEvent, timeZone: string, channelName: (id: string
 };
 
 type Page = (options: { title: string; current: NavKey; body: Html }) => Html;
+// Per-request view of the authenticated session: the render function embeds its logout CSRF token.
+type Ctx = { csrf: string; render: Page };
 
 const statusPage = (store: Store, timeZone: string, showAll: boolean, render: Page): Html => {
   const events = store.recentEvents(RECENT_EVENTS, { hideUnclassified: !showAll });
@@ -220,9 +228,15 @@ const errorPage = (): Html =>
 
 export const isAdminPath = (path: string): boolean => path === "/admin" || path.startsWith("/admin/");
 
-// Returns a handler for /admin and /admin/*. Every request passes Basic Auth first; POSTs also need Origin and CSRF.
-export const createAdmin = ({ store, slack, linear, password, timeZone, logger, csrfSecret = randomBytes(32).toString("hex"), envLabel = null }: AdminOptions) => {
-  const render: Page = ({ title, current, body }) => shell({ title, current, envLabel, timeZone, body });
+const LIMITER = { perIp: 5, global: 30, windowMs: 15 * 60_000, maxKeys: 1000 };
+const LOGIN_NOTICES = {
+  wrong: { ok: false, text: "Contraseña incorrecta. Inténtalo de nuevo." },
+  limited: { ok: false, text: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." },
+  loggedOut: { ok: true, text: "Sesión cerrada." },
+};
+
+// Returns a handler for /admin and /admin/*. Order: assets, login, session check, then for POSTs Origin and CSRF.
+export const createAdmin = ({ store, slack, linear, password, sessionSecret, timeZone, logger, limiter = createRateLimiter(LIMITER), now = Date.now, envLabel = null }: AdminOptions) => {
   const page = (res: ServerResponse, status: number, content: Html): void =>
     sendHtml(res, status, content.value, SECURITY_HEADERS);
 
@@ -230,7 +244,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
   const logUpstream = (what: string, error: unknown): void =>
     logger.error(`${what} failed: ${error instanceof Error ? error.message : "unknown error"}`);
 
-  const channels = async (res: ServerResponse, status: string | null): Promise<void> => {
+  const channels = async (res: ServerResponse, status: string | null, { csrf, render }: Ctx): Promise<void> => {
     let linearDown = false;
     try {
       if (!linear?.listProjects) throw new Error("Linear unavailable");
@@ -241,11 +255,11 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
     }
     page(res, 200, channelsPage({
       channels: store.listChannels(), projects: store.listProjects(), linksOf: (id) => store.projectsForChannel(id),
-      linearDown, flash: status, csrf: csrfToken(csrfSecret), render,
+      linearDown, flash: status, csrf, render,
     }));
   };
 
-  const people = async (res: ServerResponse, status: string | null): Promise<void> => {
+  const people = async (res: ServerResponse, status: string | null, { csrf, render }: Ctx): Promise<void> => {
     let linearDown = false;
     try {
       if (!linear?.listUsers) throw new Error("Linear unavailable");
@@ -262,15 +276,15 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
       logUpstream("Linear user list", error);
       linearDown = true;
     }
-    page(res, 200, peoplePage(store.listPeople().filter((person) => person.active !== false), linearDown, status, csrfToken(csrfSecret), render));
+    page(res, 200, peoplePage(store.listPeople().filter((person) => person.active !== false), linearDown, status, csrf, render));
   };
 
-  const get = async (res: ServerResponse, path: string, search: URLSearchParams): Promise<void> => {
+  const get = async (res: ServerResponse, path: string, search: URLSearchParams, ctx: Ctx): Promise<void> => {
     const route = path.replace(/\/+$/, "") || "/";
     if (route === "/admin") return redirect(res, "/admin/status", SECURITY_HEADERS);
-    if (route === "/admin/status") return page(res, 200, statusPage(store, timeZone, search.get("all") === "1", render));
-    if (route === "/admin/channels") return channels(res, search.get("status"));
-    if (route === "/admin/people") return people(res, search.get("status"));
+    if (route === "/admin/status") return page(res, 200, statusPage(store, timeZone, search.get("all") === "1", ctx.render));
+    if (route === "/admin/channels") return channels(res, search.get("status"), ctx);
+    if (route === "/admin/people") return people(res, search.get("status"), ctx);
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
 
@@ -332,36 +346,87 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
     return done(res, store.unlink(channel, project) ? "unlinked" : "not-found");
   };
 
-  const post = async (req: IncomingMessage, res: ServerResponse, path: string): Promise<void> => {
+  // Same-origin check plus the form body; answers 403/413/400 itself and returns null when it cannot.
+  const readForm = async (req: IncomingMessage, res: ServerResponse): Promise<Record<string, string> | null> => {
     if (!checkOrigin({ origin: req.headers.origin, referer: req.headers.referer }, req.headers.host)) {
-      return send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
+      send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
+      return null;
     }
-    let form: Record<string, string>;
     try {
-      form = parseForm((await readBody(req, MAX_FORM_BYTES)).toString("utf8"));
+      return parseForm((await readBody(req, MAX_FORM_BYTES)).toString("utf8"));
     } catch (error) {
-      return send(res, error instanceof BodyTooLargeError ? 413 : 400, { error: "invalid request" }, SECURITY_HEADERS);
+      send(res, error instanceof BodyTooLargeError ? 413 : 400, { error: "invalid request" }, SECURITY_HEADERS);
+      return null;
     }
-    if (!verifyCsrf(form.csrf, csrfSecret)) return send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
+  };
+
+  const post = async (req: IncomingMessage, res: ServerResponse, path: string, csrf: string): Promise<void> => {
+    const form = await readForm(req, res);
+    if (!form) return;
+    if (!safeEqual(form.csrf ?? "", csrf)) return send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
     const route = path.replace(/\/+$/, "");
+    if (route === "/admin/logout") return redirect(res, "/admin/login?status=logged-out", { ...SECURITY_HEADERS, "set-cookie": clearSessionCookie() });
     if (["/admin/channels/refresh", "/admin/channels/link", "/admin/channels/unlink"].includes(route)) return channelsPost(res, route, form);
     if (route === "/admin/people/sync" || route === "/admin/people/override") return peoplePost(res, route, form);
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
 
+  const loginPost = async (req: IncomingMessage, res: ServerResponse, secret: string, pass: string): Promise<void> => {
+    const form = await readForm(req, res);
+    if (!form) return;
+    const next = safeNext(form.next);
+    const ip = clientIp(req.headers["x-forwarded-for"], req.socket.remoteAddress);
+    const at = now();
+    const gate = limiter.check(ip, at);
+    // While limited the password is not evaluated, and the attempt is not counted (it would extend the lockout).
+    if (!gate.allowed) {
+      return sendHtml(res, 429, loginPage(next, LOGIN_NOTICES.limited).value, { ...SECURITY_HEADERS, "retry-after": String(gate.retryAfterS) });
+    }
+    if (!checkPassword(form.password, pass)) {
+      limiter.fail(ip, at);
+      return sendHtml(res, 401, loginPage(next, LOGIN_NOTICES.wrong).value, SECURITY_HEADERS);
+    }
+    limiter.succeed(ip);
+    redirect(res, next, { ...SECURITY_HEADERS, "set-cookie": sessionCookie(signSession(secret, pass, at)) });
+  };
+
+  const loginRoute = async (req: IncomingMessage, res: ServerResponse, search: URLSearchParams, hasSession: boolean, secret: string, pass: string): Promise<void> => {
+    if (req.method === "POST") return loginPost(req, res, secret, pass);
+    if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, { error: "method not allowed" }, { ...SECURITY_HEADERS, allow: "GET, HEAD, POST" });
+    const next = safeNext(search.get("next"));
+    if (hasSession) return redirect(res, next, SECURITY_HEADERS);
+    page(res, 200, loginPage(next, search.get("status") === "logged-out" ? LOGIN_NOTICES.loggedOut : undefined));
+  };
+
+  // Defense in depth: loadConfig already nulls a short secret, but this module must not trust its caller.
+  const secretOk = typeof sessionSecret === "string" && Buffer.byteLength(sessionSecret) >= SESSION_SECRET_MIN_BYTES;
+  if (!password || !sessionSecret || !secretOk) {
+    // Name the missing variable, never a value.
+    if (!password) logger.warn("Admin disabled: ADMIN_PASSWORD is not set");
+    if (!secretOk) logger.warn("Admin disabled: SESSION_SECRET is missing or shorter than 32 bytes");
+    return async (_req: IncomingMessage, res: ServerResponse, _path: string): Promise<void> => send(res, 403, { error: "admin disabled" }, SECURITY_HEADERS);
+  }
+
   return async (req: IncomingMessage, res: ServerResponse, path: string): Promise<void> => {
-    if (!password) return send(res, 403, { error: "admin disabled" }, SECURITY_HEADERS);
     // Static assets carry no admin data, so they are served before authentication.
     if (path.startsWith(ASSETS_PREFIX) && (req.method === "GET" || req.method === "HEAD")) {
       const version = new URL(req.url ?? "", "http://localhost").searchParams.get("v");
       return serveAsset(res, safeDecode(path.slice(ASSETS_PREFIX.length)), version, SECURITY_HEADERS);
     }
-    if (!checkBasicAuth(req.headers.authorization, password)) {
-      return send(res, 401, { error: "unauthorized" }, { ...SECURITY_HEADERS, "www-authenticate": 'Basic realm="Notifier Hub", charset="UTF-8"' });
-    }
+    const url = new URL(req.url ?? "", "http://localhost");
+    const session = verifySession(readCookie(req.headers.cookie, SESSION_COOKIE), sessionSecret, password, now());
     try {
-      if (req.method === "GET" || req.method === "HEAD") await get(res, path, new URL(req.url ?? "", "http://localhost").searchParams);
-      else if (req.method === "POST") await post(req, res, path);
+      if (path.replace(/\/+$/, "") === "/admin/login") return await loginRoute(req, res, url.searchParams, session !== null, sessionSecret, password);
+      if (!session) {
+        if (req.method !== "GET" && req.method !== "HEAD") return send(res, 401, { error: "unauthorized" }, SECURITY_HEADERS);
+        // Only allow-listed paths travel as `next`; anything else lands on the default after login.
+        const wanted = path + url.search;
+        return redirect(res, safeNext(wanted) === wanted ? `/admin/login?next=${encodeURIComponent(wanted)}` : "/admin/login", SECURITY_HEADERS);
+      }
+      const csrf = csrfFor(sessionSecret, session);
+      const ctx: Ctx = { csrf, render: ({ title, current, body }) => shell({ title, current, envLabel, timeZone, body, logoutCsrf: csrf }) };
+      if (req.method === "GET" || req.method === "HEAD") await get(res, path, url.searchParams, ctx);
+      else if (req.method === "POST") await post(req, res, path, csrf);
       else send(res, 405, { error: "method not allowed" }, { ...SECURITY_HEADERS, allow: "GET, HEAD, POST" });
     } catch (error) {
       // Only the error class is logged: messages from upstream calls could echo request details.

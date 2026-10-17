@@ -1,51 +1,26 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkBasicAuth, checkOrigin, csrfToken, verifyCsrf } from "../src/auth.ts";
+import * as auth from "../src/auth.ts";
+import { checkOrigin, checkPassword } from "../src/auth.ts";
 
-const basic = (user: string, password: string): string =>
-  `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}`;
-
-test("checkBasicAuth accepts the right password with any user name", () => {
-  assert.equal(checkBasicAuth(basic("admin", "pw"), "pw"), true);
-  assert.equal(checkBasicAuth(basic("", "pw"), "pw"), true);
-  assert.equal(checkBasicAuth(basic("x", "p:w"), "p:w"), true);
+test("checkPassword accepts only the exact password", () => {
+  assert.equal(checkPassword("pw", "pw"), true);
+  assert.equal(checkPassword("p:w", "p:w"), true);
+  for (const wrong of ["", "PW", "pw ", " pw", "p", "a".repeat(5000)]) assert.equal(checkPassword(wrong, "pw"), false, wrong.slice(0, 10));
 });
 
-test("checkBasicAuth rejects missing, malformed and wrong credentials", () => {
-  assert.equal(checkBasicAuth(undefined, "pw"), false);
-  assert.equal(checkBasicAuth("", "pw"), false);
-  assert.equal(checkBasicAuth(["a", "b"], "pw"), false);
-  assert.equal(checkBasicAuth("Bearer pw", "pw"), false);
-  assert.equal(checkBasicAuth("Basic !!!", "pw"), false);
-  assert.equal(checkBasicAuth(`Basic ${Buffer.from("nocolon").toString("base64")}`, "pw"), false);
-  assert.equal(checkBasicAuth(basic("a", "wrong"), "pw"), false);
-  assert.equal(checkBasicAuth(basic("a", "pw "), "pw"), false);
-  assert.equal(checkBasicAuth(basic("a", "PW"), "pw"), false);
+test("checkPassword denies everything when the password is unset or empty or the input is not a string", () => {
+  assert.equal(checkPassword("", ""), false);
+  assert.equal(checkPassword("", undefined), false);
+  assert.equal(checkPassword("pw", undefined), false);
+  assert.equal(checkPassword(undefined, "pw"), false);
+  assert.equal(checkPassword(["pw"] as unknown as string, "pw"), false);
 });
 
-test("checkBasicAuth denies everything when the password is unset or empty", () => {
-  assert.equal(checkBasicAuth(basic("a", ""), undefined), false);
-  assert.equal(checkBasicAuth(basic("a", ""), ""), false);
-  assert.equal(checkBasicAuth(basic("a", "pw"), undefined), false);
-});
-
-test("checkBasicAuth handles passwords of different length without throwing", () => {
-  assert.equal(checkBasicAuth(basic("a", "a".repeat(5000)), "pw"), false);
-});
-
-test("csrfToken is deterministic per secret and differs across secrets", () => {
-  assert.equal(csrfToken("s1"), csrfToken("s1"));
-  assert.notEqual(csrfToken("s1"), csrfToken("s2"));
-  assert.match(csrfToken("s1"), /^[0-9a-f]{64}$/);
-});
-
-test("verifyCsrf compares the submitted token in constant time form", () => {
-  const token = csrfToken("s1");
-  assert.equal(verifyCsrf(token, "s1"), true);
-  assert.equal(verifyCsrf(token, "s2"), false);
-  assert.equal(verifyCsrf(undefined, "s1"), false);
-  assert.equal(verifyCsrf("short", "s1"), false);
-  assert.equal(verifyCsrf("", "s1"), false);
+test("Basic Auth and the process-global CSRF token are gone from auth.ts", () => {
+  assert.equal("checkBasicAuth" in auth, false);
+  assert.equal("csrfToken" in auth, false);
+  assert.equal("verifyCsrf" in auth, false);
 });
 
 test("checkOrigin requires Origin (or Referer) to match Host", () => {
