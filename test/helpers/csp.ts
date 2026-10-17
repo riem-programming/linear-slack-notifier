@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 const INLINE = /<[^>]*[\s/"'](style|on[a-z]+)\s*=|<style/i;
 const JS_URL = /href\s*=\s*["']?\s*javascript:/i;
 
-export const assertNoInlineCode = (markup: string, message: string | Error = "inline code found"): void => {
+export const assertNoInlineCode = (markup: string, message = "inline code found"): void => {
   assert.doesNotMatch(markup, INLINE, message);
   assert.doesNotMatch(markup, JS_URL, message);
 };
