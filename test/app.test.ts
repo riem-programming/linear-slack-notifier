@@ -172,3 +172,66 @@ test("oversized chunked body without content-length returns 413", async () => {
     assert.equal(status, 413);
   });
 });
+
+const issueBody = (extra: Record<string, unknown>): string =>
+  JSON.stringify({
+    action: "create", type: "Issue", webhookTimestamp: 1_000_000, ...extra,
+    data: { identifier: "K-1", title: "T", url: "https://l/K-1", projectId: "proj-1", ...(extra.data as object) },
+  });
+
+const runWebhook = async (body: string, userMap: Record<string, string> = {}) => {
+  const sent: string[] = [];
+  const infos: string[] = [];
+  const server = createApp({
+    secret, resolveSlack: () => async (t) => { sent.push(t); }, userMap, now: () => 1_000_000,
+    logger: { info: (l) => infos.push(l), error: () => {} },
+  });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    assert.equal((await post(base, body, sign(body))).status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+  return { sent, infos };
+};
+
+test("prototype-like user ids are never treated as mapped", async () => {
+  for (const id of ["__proto__", "constructor", "toString"]) {
+    const { sent, infos } = await runWebhook(
+      issueBody({ actor: { id, name: "Ana" }, data: { assignee: { id: "x" + id, name: "Beto" } } }),
+    );
+    assert.deepEqual(sent, ["Ana creó <https://l/K-1|K-1>: T y se lo asignó a Beto"]);
+    assert.ok(infos.includes(`Issue event: kind=created actor=${id} actor_mapped=no assignee=x${id} assignee_mapped=no`));
+    const asAssignee = await runWebhook(
+      issueBody({ actor: { name: "Ana" }, data: { assignee: { id, name: "Beto" } } }),
+    );
+    assert.deepEqual(asAssignee.sent, ["Ana creó <https://l/K-1|K-1>: T y se lo asignó a Beto"]);
+  }
+});
+
+test("Issue events log a compact diagnostic with mapped flags", async () => {
+  const { infos } = await runWebhook(
+    issueBody({ actor: { id: "u-ana", name: "Ana" }, data: { assignee: { id: "other", name: "Beto" } } }),
+    { "u-ana": "UANA" },
+  );
+  assert.ok(infos.includes("Issue event: kind=created actor=u-ana actor_mapped=yes assignee=other assignee_mapped=no"));
+});
+
+test("non-Issue payloads log nothing; ignored Issue events log action and reason", async () => {
+  const comment = await runWebhook(issueBody({ type: "Comment", actor: { name: "Ana" } }));
+  assert.deepEqual(comment.infos, []);
+  assert.deepEqual(comment.sent, []);
+  const removed = await runWebhook(issueBody({ action: "remove", actor: { name: "Ana" } }));
+  assert.deepEqual(removed.infos, ["Issue event ignored: action=remove reason=not a notifiable event"]);
+});
+
+test("unresolvable assignee on an assigned update is ignored with a reason", async () => {
+  const { sent, infos } = await runWebhook(
+    issueBody({ action: "update", actor: { name: "Ana" }, updatedFrom: { assigneeId: null }, data: { assigneeId: "ghost" } }),
+  );
+  assert.deepEqual(sent, []);
+  assert.deepEqual(infos, ["Issue event ignored: action=update reason=assignee not resolvable"]);
+});

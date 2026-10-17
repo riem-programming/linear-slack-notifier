@@ -12,9 +12,9 @@ const escapeText = (value: string): string =>
 
 const escapeUrl = (value: string): string => value.replace(/&/g, "&amp;");
 
-const plainName = (person: Person, record: PersonRecord | null): string => {
+const plainName = (person: Person, record: PersonRecord | null): string | null => {
   const name = person.name ?? record?.name;
-  return name ? escapeText(name) : FALLBACK_NAME;
+  return name ? escapeText(name) : null;
 };
 
 const isActor = (person: Person, actor: Person): boolean =>
@@ -24,7 +24,7 @@ const isActor = (person: Person, actor: Person): boolean =>
 export const planMentions = (notice: IssueNotice, lookup: PersonLookup): MentionPlan => {
   const { actor } = notice;
   const find = (person: Person): PersonRecord | null => (person.id ? lookup(person.id) : null);
-  const render = (person: Person): string => {
+  const render = (person: Person): string | null => {
     const record = find(person);
     if (!isActor(person, actor) && record?.slackUserId) return `<@${record.slackUserId}>`;
     return plainName(person, record);
@@ -36,6 +36,7 @@ export const planMentions = (notice: IssueNotice, lookup: PersonLookup): Mention
     for (const person of [notice.creator, notice.assignee]) {
       if (!person || isActor(person, actor)) continue;
       const rendered = render(person);
+      if (!rendered) continue;
       if (seen.has(person.id ?? rendered)) continue;
       seen.add(person.id ?? rendered);
       cc.push(rendered);
@@ -43,14 +44,14 @@ export const planMentions = (notice: IssueNotice, lookup: PersonLookup): Mention
   }
 
   return {
-    actor: plainName(actor, find(actor)),
+    actor: plainName(actor, find(actor)) ?? FALLBACK_NAME,
     assignee: notice.assignee ? render(notice.assignee) : null,
     cc,
   };
 };
 
-/** Renders the Spanish Slack mrkdwn notice for a classified event. */
-export const renderNotice = (notice: IssueNotice, plan: MentionPlan): string => {
+/** Renders the Spanish Slack mrkdwn notice. Returns null for an `assigned` notice whose assignee cannot be written. */
+export const renderNotice = (notice: IssueNotice, plan: MentionPlan): string | null => {
   const link = `<${escapeUrl(notice.url)}|${escapeText(notice.identifier)}>`;
   const title = escapeText(notice.title);
   const cc = plan.cc.length > 0 ? ` · cc ${plan.cc.join(" ")}` : "";
@@ -59,7 +60,7 @@ export const renderNotice = (notice: IssueNotice, plan: MentionPlan): string => 
     case "created":
       return `${plan.actor} creó ${link}: ${title}${plan.assignee ? ` y se lo asignó a ${plan.assignee}` : ""}`;
     case "assigned":
-      return `${plan.actor} asignó ${link} a ${plan.assignee ?? FALLBACK_NAME}: ${title}`;
+      return plan.assignee ? `${plan.actor} asignó ${link} a ${plan.assignee}: ${title}` : null;
     case "completed":
       return `${plan.actor} completó ${link} ✅: ${title}${cc}`;
     case "canceled":

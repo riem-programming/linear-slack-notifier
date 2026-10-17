@@ -64,15 +64,26 @@ export const createApp = ({
 
     const lookup: PersonLookup = (id) =>
       Object.hasOwn(userMap, id) ? { slackUserId: userMap[id] ?? null, name: null } : null;
-    const result = classifyEvent(payload, now());
+    const mapped = (id: string | null): string => (id && lookup(id)?.slackUserId ? "yes" : "no");
+    const result = classifyEvent(payload);
     send(res, 200, { ok: true });
-    if (result.kind === "ignored") {
-      logger.info(`Issue event ignored: reason=${result.reason}`);
-      return;
-    }
+
+    const isIssue = typeof payload === "object" && payload !== null && "type" in payload && payload.type === "Issue";
+    const action =
+      typeof payload === "object" && payload !== null && "action" in payload && typeof payload.action === "string"
+        ? payload.action
+        : "unknown";
+    const ignore = (reason: string): void => {
+      if (isIssue) logger.info(`Issue event ignored: action=${action} reason=${reason}`);
+    };
+    if (result.kind === "ignored") return ignore(result.reason);
     const { projectId } = result;
     const message = renderNotice(result, planMentions(result, lookup));
-    logger.info(`Issue event: kind=${result.kind}`);
+    if (!message) return ignore("assignee not resolvable");
+    logger.info(
+      `Issue event: kind=${result.kind} actor=${result.actor.id ?? "none"} actor_mapped=${mapped(result.actor.id)}` +
+        ` assignee=${result.assignee?.id ?? "none"} assignee_mapped=${mapped(result.assignee?.id ?? null)}`,
+    );
 
     const postToSlack = resolveSlack(projectId);
     if (!postToSlack) {

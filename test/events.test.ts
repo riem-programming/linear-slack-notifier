@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifyEvent } from "../src/events.ts";
 
-const NOW = Date.parse("2026-10-16T12:00:00.000Z");
 const data = {
   identifier: "KAMAITI-9",
   title: "Fix login",
@@ -21,7 +20,7 @@ const update = (extra: Record<string, unknown>, updatedFrom: Record<string, unkn
 });
 
 test("created carries actor, creator, assignee and issue fields", () => {
-  const result = classifyEvent({ action: "create", type: "Issue", actor, data: { ...data, assignee: beto } }, NOW);
+  const result = classifyEvent({ action: "create", type: "Issue", actor, data: { ...data, assignee: beto } });
   assert.deepEqual(result, {
     kind: "created",
     actor,
@@ -35,7 +34,7 @@ test("created carries actor, creator, assignee and issue fields", () => {
 });
 
 test("assignee id falls back to data.assigneeId and missing actor is empty", () => {
-  const result = classifyEvent({ action: "create", type: "Issue", data: { ...data, assigneeId: "u-beto" } }, NOW);
+  const result = classifyEvent({ action: "create", type: "Issue", data: { ...data, assigneeId: "u-beto" } });
   assert.equal(result.kind, "created");
   if (result.kind !== "created") return;
   assert.deepEqual(result.assignee, { id: "u-beto", name: null });
@@ -43,34 +42,34 @@ test("assignee id falls back to data.assigneeId and missing actor is empty", () 
 });
 
 test("assigned when assignee changes to a user", () => {
-  const result = classifyEvent(update({ assignee: beto }, { assigneeId: null }), NOW);
+  const result = classifyEvent(update({ assignee: beto }, { assigneeId: null }));
   assert.equal(result.kind, "assigned");
   if (result.kind === "assigned") assert.deepEqual(result.assignee, beto);
 });
 
 test("unassigned update is ignored", () => {
-  const result = classifyEvent(update({}, { assigneeId: "u-beto" }), NOW);
+  const result = classifyEvent(update({}, { assigneeId: "u-beto" }));
   assert.equal(result.kind, "ignored");
 });
 
 test("completed when state changes to a completed type", () => {
-  const result = classifyEvent(update({ state: completed }, { stateId: "old", completedAt: null }), NOW);
+  const result = classifyEvent(update({ state: completed }, { stateId: "old", completedAt: null }));
   assert.equal(result.kind, "completed");
 });
 
 test("canceled when state changes to a canceled type", () => {
-  const result = classifyEvent(update({ state: canceled }, { stateId: "old", canceledAt: null }), NOW);
+  const result = classifyEvent(update({ state: canceled }, { stateId: "old", canceledAt: null }));
   assert.equal(result.kind, "canceled");
 });
 
 test("moving between completed or canceled states does not fire again", () => {
-  assert.equal(classifyEvent(update({ state: completed }, { stateId: "d" }), NOW).kind, "ignored");
+  assert.equal(classifyEvent(update({ state: completed }, { stateId: "d" })).kind, "ignored");
   assert.equal(
-    classifyEvent(update({ state: completed }, { stateId: "d", completedAt: "2026-01-01T00:00:00.000Z" }), NOW).kind,
+    classifyEvent(update({ state: completed }, { stateId: "d", completedAt: "2026-01-01T00:00:00.000Z" })).kind,
     "ignored",
   );
   assert.equal(
-    classifyEvent(update({ state: canceled }, { stateId: "d", canceledAt: "2026-01-01T00:00:00.000Z" }), NOW).kind,
+    classifyEvent(update({ state: canceled }, { stateId: "d", canceledAt: "2026-01-01T00:00:00.000Z" })).kind,
     "ignored",
   );
 });
@@ -78,48 +77,42 @@ test("moving between completed or canceled states does not fire again", () => {
 test("state change wins over a simultaneous assignment", () => {
   const result = classifyEvent(
     update({ assignee: beto, state: completed }, { assigneeId: null, stateId: "o", completedAt: null }),
-    NOW,
   );
   assert.equal(result.kind, "completed");
 });
 
 test("irrelevant updates are ignored with a reason and the project id", () => {
-  assert.deepEqual(classifyEvent(update({}, { title: "old" }), NOW), {
+  assert.deepEqual(classifyEvent(update({}, { title: "old" })), {
     kind: "ignored", reason: "not a notifiable event", projectId: "proj-1",
   });
-  assert.equal(classifyEvent(update({}, { stateId: "o" }), NOW).kind, "ignored");
-  assert.equal(classifyEvent(update({ state: completed }, { title: "x" }), NOW).kind, "ignored");
-  assert.equal(classifyEvent({ action: "update", type: "Issue", actor, data }, NOW).kind, "ignored");
+  assert.equal(classifyEvent(update({}, { stateId: "o" })).kind, "ignored");
+  assert.equal(classifyEvent(update({ state: completed }, { title: "x" })).kind, "ignored");
+  assert.equal(classifyEvent({ action: "update", type: "Issue", actor, data }).kind, "ignored");
 });
 
 test("unsupported actions and non-Issue types are ignored", () => {
-  assert.equal(classifyEvent({ action: "remove", type: "Issue", actor, data }, NOW).kind, "ignored");
-  assert.equal(classifyEvent({ action: "create", type: "Comment", actor, data }, NOW).kind, "ignored");
+  assert.equal(classifyEvent({ action: "remove", type: "Issue", actor, data }).kind, "ignored");
+  assert.equal(classifyEvent({ action: "create", type: "Comment", actor, data }).kind, "ignored");
 });
 
 test("malformed payloads are ignored", () => {
   for (const payload of [null, "x", {}, { action: "create", type: "Issue" }, { action: "create", type: "Issue", actor, data: { title: 1 } }]) {
-    assert.equal(classifyEvent(payload, NOW).kind, "ignored");
+    assert.equal(classifyEvent(payload).kind, "ignored");
   }
 });
 
 test("projectId is null when missing, empty or not a string", () => {
   for (const projectId of [undefined, null, "", 5, {}]) {
-    const result = classifyEvent({ action: "create", type: "Issue", actor, data: { ...data, projectId } }, NOW);
+    const result = classifyEvent({ action: "create", type: "Issue", actor, data: { ...data, projectId } });
     assert.equal(result.kind === "created" ? result.projectId : "x", null);
   }
 });
 
-test("assignment right after creation is skipped as assigned-at-create", () => {
-  const fresh = { assignee: beto, createdAt: new Date(NOW - 5_000).toISOString() };
-  assert.deepEqual(classifyEvent(update(fresh, { assigneeId: null }), NOW), {
-    kind: "ignored", reason: "assigned-at-create", projectId: "proj-1",
-  });
+test("assignment right after creation is still assigned (deliberate assignment)", () => {
+  const fresh = { assignee: beto, createdAt: new Date().toISOString() };
+  assert.equal(classifyEvent(update(fresh, { assigneeId: null })).kind, "assigned");
 });
 
-test("assignment after the 10s window or reassignment is still assigned", () => {
-  const late = { assignee: beto, createdAt: new Date(NOW - 11_000).toISOString() };
-  assert.equal(classifyEvent(update(late, { assigneeId: null }), NOW).kind, "assigned");
-  const fresh = { assignee: beto, createdAt: new Date(NOW - 5_000).toISOString() };
-  assert.equal(classifyEvent(update(fresh, { assigneeId: "u-other" }), NOW).kind, "assigned");
+test("reassignment from another user is assigned", () => {
+  assert.equal(classifyEvent(update({ assignee: beto }, { assigneeId: "u-other" })).kind, "assigned");
 });

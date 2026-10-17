@@ -16,8 +16,6 @@ export type IssueNotice = {
 export type Ignored = { kind: "ignored"; reason: string; projectId: string | null };
 
 const NOT_NOTIFIABLE = "not a notifiable event";
-const ASSIGNED_AT_CREATE = "assigned-at-create";
-const CREATE_WINDOW_MS = 10_000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -37,8 +35,8 @@ const ignored = (reason: string, projectId: string | null = null): Ignored => ({
   projectId,
 });
 
-/** Classifies a Linear webhook payload. Pure: `now` is the arrival time in epoch ms. */
-export const classifyEvent = (payload: unknown, now: number): IssueNotice | Ignored => {
+/** Classifies a Linear webhook payload. Pure. */
+export const classifyEvent = (payload: unknown): IssueNotice | Ignored => {
   if (!isRecord(payload) || payload.type !== "Issue") return ignored(NOT_NOTIFIABLE);
   const action = nonEmptyString(payload.action);
   const data = payload.data;
@@ -76,12 +74,6 @@ export const classifyEvent = (payload: unknown, now: number): IssueNotice | Igno
     }
   }
 
-  if ("assigneeId" in changed && assignee) {
-    const createdAt = typeof data.createdAt === "string" ? Date.parse(data.createdAt) : NaN;
-    if (changed.assigneeId == null && now - createdAt <= CREATE_WINDOW_MS) {
-      return ignored(ASSIGNED_AT_CREATE, projectId);
-    }
-    return notice("assigned");
-  }
+  if ("assigneeId" in changed && assignee) return notice("assigned");
   return ignored(NOT_NOTIFIABLE, projectId);
 };

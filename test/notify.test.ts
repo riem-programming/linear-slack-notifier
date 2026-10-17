@@ -62,11 +62,28 @@ test("unmatched person renders as escaped plain name", () => {
   assert.equal(render(n), `Ana Gómez asignó ${link} a C &amp; &lt;D&gt;: Diseñar landing`);
 });
 
-test("name falls back to the people lookup, then to Alguien", () => {
+test("name falls back to the people lookup; actor falls back to Alguien", () => {
   const byLookup: PersonLookup = (id) => (id === "u-z" ? { slackUserId: null, name: "Zoe" } : null);
   assert.equal(planMentions(notice("assigned", { assignee: { id: "u-z", name: null } }), byLookup).assignee, "Zoe");
-  assert.equal(planMentions(notice("assigned", { assignee: { id: "u-q", name: null } }), byLookup).assignee, "Alguien");
   assert.equal(planMentions(notice("created", { actor: { id: null, name: null } }), byLookup).actor, "Alguien");
+});
+
+test("assignee with no name and no Slack mapping is dropped", () => {
+  const ghost = { id: "ghost", name: null };
+  assert.equal(planMentions(notice("created", { assignee: ghost }), lookup).assignee, null);
+  assert.equal(render(notice("created", { assignee: ghost })), `Ana Gómez creó ${link}: Diseñar landing`);
+  assert.equal(render(notice("assigned", { assignee: ghost })), null);
+});
+
+test("cc omits people with no name and no Slack mapping", () => {
+  const n = notice("canceled", { actor: { id: "u-x", name: "T" }, creator: { id: "ghost", name: null }, assignee: luis });
+  assert.deepEqual(planMentions(n, lookup).cc, ["<@ULUIS>"]);
+  assert.equal(render({ ...n, assignee: null }), `T canceló ${link} 🚫: Diseñar landing`);
+});
+
+test("mapped person with no name still renders as a mention", () => {
+  const n = notice("assigned", { assignee: { id: "u-luis", name: null } });
+  assert.equal(render(n), `Ana Gómez asignó ${link} a <@ULUIS>: Diseñar landing`);
 });
 
 test("actor is never a mention even when matched", () => {
