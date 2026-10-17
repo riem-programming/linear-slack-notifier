@@ -171,10 +171,10 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(slack): list workspace members with cached memo helper`
 - Linear ticket: "Slack: listado de miembros con caché" - Obtener miembros del workspace con paginación y filtros, reutilizando el helper de caché extraído.
 - Files: `src/memo.ts`, `src/linear.ts`, `src/slack.ts`, `src/members.ts` (or in `slack.ts`: `filterMembers`), `test/memo.test.ts`, `test/slack.test.ts`, `test/linear.test.ts`.
-- [ ] 5a.1 RED: `memo` TTL, shared in-flight promise, 30 s failure replay (moved from linear tests, unchanged behavior).
-- [ ] 5a.2 RED: `listMembers`: pagination up to 20 pages, excludes deleted/bots/app users/USLACKBOT, sorted by folded label, 429 retry, `ok:false` error without secrets.
-- [ ] 5a.3 RED: `filterMembers` (display name, real name, handle, email; accents; limit 50; stale list served on refresh failure).
-- [ ] 5a.4 GREEN: extract `memo.ts`, update `linear.ts`; implement `listMembers` and `filterMembers`.
+- [x] 5a.1 RED: `memo` TTL, shared in-flight promise, 30 s failure replay (moved from linear tests, unchanged behavior).
+- [x] 5a.2 RED: `listMembers`: pagination up to 20 pages, excludes deleted/bots/app users/USLACKBOT, sorted by folded label, 429 retry, `ok:false` error without secrets.
+- [x] 5a.3 RED: `filterMembers` (display name, real name, handle, email; accents; limit 50; stale list served on refresh failure).
+- [x] 5a.4 GREEN: extract `memo.ts`, update `linear.ts`; implement `listMembers` and `filterMembers`.
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: no visible change; Linear lookups still work (People page loads).
 - USER prerequisites: confirm the Slack app has the `users:read` scope (add `users:read.email` only if email search is wanted; email is null otherwise) and reinstall if scopes change.

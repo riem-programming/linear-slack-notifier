@@ -167,3 +167,141 @@ test("respond cancels the response body on a non-2xx answer", async () => {
   await assert.rejects(createSlackApi({ token: "t", fetch }).respond("https://hooks.slack.com/x", "x", "in_channel"));
   assert.equal(cancelled, true);
 });
+
+const user = (id: string, extra: Record<string, unknown> = {}) => ({ id, name: `h${id}`, real_name: `Real ${id}`, profile: { display_name: "", email: `${id}@x.io` }, ...extra });
+
+test("listMembers maps users, excludes deleted, bots, app users and USLACKBOT, and sorts by folded name", async () => {
+  const { fetch, calls } = fakeFetch(
+    json({
+      ok: true,
+      members: [
+        user("U3", { real_name: "Zoe" }),
+        user("U1", { real_name: "Álvaro" }),
+        user("U2", { deleted: true }),
+        user("B1", { is_bot: true }),
+        user("A1", { is_app_user: true }),
+        user("USLACKBOT", { name: "slackbot" }),
+        user("U4", { real_name: "", profile: { display_name: "Beto" } }),
+        user("U5", { real_name: "", profile: {} }),
+      ],
+      response_metadata: { next_cursor: "" },
+    }),
+  );
+  const members = await createSlackApi({ token: "xoxb-t", fetch }).listMembers();
+  assert.deepEqual(members.map((x) => x.id), ["U1", "U4", "U5", "U3"]);
+  assert.deepEqual(members[0], { id: "U1", realName: "Álvaro", displayName: "", handle: "hU1", email: "U1@x.io" });
+  assert.equal(members[1]?.displayName, "Beto");
+  assert.equal(members[1]?.realName, "");
+  assert.equal(members[2]?.handle, "hU5");
+  assert.equal(members[2]?.email, null);
+  assert.equal(calls[0]?.url, "https://slack.com/api/users.list");
+  assert.equal(new URLSearchParams(calls[0]?.init.body as string).get("limit"), "200");
+});
+
+test("listMembers follows cursors and stops at the page cap", async () => {
+  const pages = Array.from({ length: 25 }, (_, i) => json({ ok: true, members: [user(`U${i}`)], response_metadata: { next_cursor: `c${i}` } }));
+  const { fetch, calls } = fakeFetch(...pages);
+  const members = await createSlackApi({ token: "t", fetch }).listMembers();
+  assert.equal(calls.length, 20);
+  assert.equal(members.length, 20);
+  assert.equal(new URLSearchParams(calls[1]?.init.body as string).get("cursor"), "c0");
+});
+
+test("listMembers caches for 10 minutes and shares one in-flight request", async () => {
+  let t = 0;
+  const { fetch, calls } = fakeFetch(json({ ok: true, members: [user("U1")] }), json({ ok: true, members: [user("U2")] }));
+  const api = createSlackApi({ token: "t", fetch, now: () => t });
+  const [a, b] = await Promise.all([api.listMembers(), api.listMembers()]);
+  assert.equal(a, b);
+  t = 10 * 60_000;
+  assert.equal((await api.listMembers())[0]?.id, "U1");
+  t += 1;
+  assert.equal((await api.listMembers())[0]?.id, "U2");
+  assert.equal(calls.length, 2);
+});
+
+test("listMembers retries once on a short 429", async () => {
+  const { fetch, calls } = fakeFetch(json({ ok: false }, { status: 429, headers: { "retry-after": "1" } }), json({ ok: true, members: [user("U1")] }));
+  const members = await createSlackApi({ token: "t", fetch, sleep: async () => {} }).listMembers();
+  assert.equal(members.length, 1);
+  assert.equal(calls.length, 2);
+});
+
+test("listMembers throws a fixed error on ok:false, replays it for 30s and never leaks the token", async () => {
+  let t = 0;
+  const { fetch, calls } = fakeFetch(json({ ok: false, error: "missing_scope" }), json({ ok: true, members: [user("U1")] }));
+  const api = createSlackApi({ token: "xoxb-secret", fetch, now: () => t });
+  await assert.rejects(api.listMembers(), (error: Error) => error.message === "missing_scope" && !error.message.includes("xoxb-secret"));
+  await assert.rejects(api.listMembers(), { message: "missing_scope" });
+  assert.equal(calls.length, 1);
+  t = 30_001;
+  assert.equal((await api.listMembers()).length, 1);
+});
+
+test("listMembers serves the stale list with a warning when a refresh fails", async () => {
+  let t = 0;
+  const warnings: string[] = [];
+  const { fetch } = fakeFetch(json({ ok: true, members: [user("U1")] }), json({ ok: false, error: "ratelimited" }));
+  const api = createSlackApi({ token: "t", fetch, now: () => t, logger: { warn: (m: string) => void warnings.push(m) } });
+  await api.listMembers();
+  t = 10 * 60_000 + 1;
+  assert.equal((await api.listMembers())[0]?.id, "U1");
+  assert.equal(warnings.length, 1);
+  assert.ok(!warnings[0]?.includes("secret"));
+});
+
+test("listMembers sorts by folded display name, then real name, then handle", async () => {
+  const { fetch } = fakeFetch(
+    json({
+      ok: true,
+      members: [
+        user("U1", { real_name: "Zed", profile: { display_name: "alfa" } }),
+        user("U2", { real_name: "Bruno", profile: {} }),
+        user("U3", { real_name: "", name: "carlos", profile: {} }),
+      ],
+    }),
+  );
+  const members = await createSlackApi({ token: "t", fetch }).listMembers();
+  assert.deepEqual(members.map((x) => x.id), ["U1", "U2", "U3"]);
+});
+
+test("listMembers warns once, without PII, when the page cap cuts the list short", async () => {
+  const warnings: string[] = [];
+  const pages = Array.from({ length: 20 }, (_, i) => json({ ok: true, members: [user(`U${i}`)], response_metadata: { next_cursor: `c${i}` } }));
+  const { fetch } = fakeFetch(...pages);
+  await createSlackApi({ token: "t", fetch, logger: { warn: (m: string) => void warnings.push(m) } }).listMembers();
+  assert.equal(warnings.length, 1);
+  assert.ok(!/c19|U\d/.test(warnings[0] ?? ""));
+});
+
+test("listMembers does not warn when the last page has no cursor", async () => {
+  const warnings: string[] = [];
+  const { fetch } = fakeFetch(json({ ok: true, members: [user("U1")] }));
+  await createSlackApi({ token: "t", fetch, logger: { warn: (m: string) => void warnings.push(m) } }).listMembers();
+  assert.equal(warnings.length, 0);
+});
+
+test("stale list: concurrent callers and a replayed failure both get it, with one warning carrying the error code", async () => {
+  let t = 0;
+  const warnings: string[] = [];
+  const { fetch, calls } = fakeFetch(json({ ok: true, members: [user("U1")] }), json({ ok: false, error: "ratelimited" }), json({ ok: true, members: [user("U2")] }), json({ ok: false, error: "fatal_error" }));
+  const api = createSlackApi({ token: "xoxb-secret", fetch, now: () => t, logger: { warn: (m: string) => void warnings.push(m) } });
+  await api.listMembers();
+  t = 10 * 60_000 + 1;
+  const [a, b] = await Promise.all([api.listMembers(), api.listMembers()]);
+  assert.equal(a[0]?.id, "U1");
+  assert.equal(b[0]?.id, "U1");
+  t += 5000;
+  assert.equal((await api.listMembers())[0]?.id, "U1"); // replayed failure inside 30s
+  assert.equal(calls.length, 2);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0] ?? "", /ratelimited/);
+  assert.ok(!(warnings[0] ?? "").includes("xoxb-secret"));
+  // A successful refresh ends the episode; the next failure warns again.
+  t += 30_000;
+  assert.equal((await api.listMembers())[0]?.id, "U2");
+  t += 10 * 60_000 + 1;
+  assert.equal((await api.listMembers())[0]?.id, "U2");
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[1] ?? "", /fatal_error/);
+});
