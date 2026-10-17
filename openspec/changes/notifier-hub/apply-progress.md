@@ -307,3 +307,9 @@ Mode: Strict TDD. Branch: `feat/kamaiti-81-status-summary` (base `origin/develop
 
 ### Status
 Slice 4a: 4/4 tasks complete (41/41 across 1a-4a). Slices 4b-6 remain. Suite 233/233, typecheck clean.
+
+### Batch 8b - Review fixes on slice 4a (strict TDD, tests first)
+- `loadSnapshot`: `hasNextPage` true with a null or empty `endCursor` now stops, logs a warning and marks `truncated`.
+- `projectMilestones(first: 100)` is requested only on the first page (`@include(if: $withMilestones)`).
+- `status.ts`: user text (project, titles, state, milestone, person names, identifiers) gets a zero-width space after `*`, `_`, `~` and backtick, on top of `& < >` escaping; titles are cut at 120 characters with an ellipsis.
+- Suite 237/237, typecheck clean.
