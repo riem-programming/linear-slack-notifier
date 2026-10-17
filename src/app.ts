@@ -1,10 +1,13 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
-import { analyzeEvent } from "./events.ts";
-import type { UserMap } from "./events.ts";
+import { classifyEvent } from "./events.ts";
 import { BodyTooLargeError, parseJson, readBody, send } from "./http.ts";
 import { isFresh, verifySignature } from "./signature.ts";
+import { planMentions, renderNotice } from "./notify.ts";
+import type { PersonLookup } from "./notify.ts";
 import type { SlackResolver } from "./slack.ts";
+
+export type UserMap = Readonly<Record<string, string>>;
 
 type AppOptions = {
   secret: string;
@@ -59,10 +62,28 @@ export const createApp = ({
       return;
     }
 
-    const { message, log, projectId } = analyzeEvent(payload, userMap);
-    if (log) logger.info(log);
+    const lookup: PersonLookup = (id) =>
+      Object.hasOwn(userMap, id) ? { slackUserId: userMap[id] ?? null, name: null } : null;
+    const mapped = (id: string | null): string => (id && lookup(id)?.slackUserId ? "yes" : "no");
+    const result = classifyEvent(payload);
     send(res, 200, { ok: true });
-    if (!message) return;
+
+    const isIssue = typeof payload === "object" && payload !== null && "type" in payload && payload.type === "Issue";
+    const action =
+      typeof payload === "object" && payload !== null && "action" in payload && typeof payload.action === "string"
+        ? payload.action
+        : "unknown";
+    const ignore = (reason: string): void => {
+      if (isIssue) logger.info(`Issue event ignored: action=${action} reason=${reason}`);
+    };
+    if (result.kind === "ignored") return ignore(result.reason);
+    const { projectId } = result;
+    const message = renderNotice(result, planMentions(result, lookup));
+    if (!message) return ignore("assignee not resolvable");
+    logger.info(
+      `Issue event: kind=${result.kind} actor=${result.actor.id ?? "none"} actor_mapped=${mapped(result.actor.id)}` +
+        ` assignee=${result.assignee?.id ?? "none"} assignee_mapped=${mapped(result.assignee?.id ?? null)}`,
+    );
 
     const postToSlack = resolveSlack(projectId);
     if (!postToSlack) {

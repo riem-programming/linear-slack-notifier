@@ -80,3 +80,40 @@ Mode: Strict TDD. Branch: `feat/kamaiti-75-http-config-signature` (base `origin/
 - `verifySlackSignature` now accepts `string | string[] | undefined` headers and returns false for arrays (duplicated headers); regression tests for array, odd-length hex and uppercase hex added. Suite 91/91.
 - `.env.example` documents the new env schema; legacy `SLACK_PROJECT_WEBHOOKS`/`SLACK_USER_MAP` removed from it only (README/OPERATIONS updated in slice 6).
 - OPS NOTE for slice 2b/6: the Dokploy volume mounted at `/data` must be writable by uid 1000 (`node`). Verify on first deploy; bind mounts are root-owned and will make DB open fail at startup.
+
+## Batch 3 - Slice 2a (Notification logic, pure)
+
+Mode: Strict TDD. Branch: `feat/kamaiti-76-classify-and-render` (base `origin/develop`, 1a+1b merged). Linear: KAMAITI-76.
+
+### Completed
+- [x] 2a.1 RED `test/events.test.ts` (4 kinds, ignored, assigned-at-create D10, malformed, projectId)
+- [x] 2a.2 RED `test/notify.test.ts` (planMentions, renderNotice copy, escaping)
+- [x] 2a.3 GREEN `src/events.ts`: pure `classifyEvent(payload, now)`; old rendering removed
+- [x] 2a.4 GREEN `src/notify.ts`: `planMentions(notice, lookup)`, `renderNotice(notice, plan)`
+- [x] 2a.5 REFACTOR: `src/app.ts` call site adapted (classify + plan + render using the legacy `userMap` as lookup); `UserMap` type moved into `app.ts`
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 2a.1 | `test/events.test.ts` | Unit | 91/91 baseline | Failed (export missing) | Passed | all kinds, precedence, window edges, malformed | Clean |
+| 2a.2 | `test/notify.test.ts` | Unit | n/a (new) | Failed (module missing) | Passed | actor/creator/assignee dedupe, plain/escaped, fallbacks | Clean |
+| 2a.3-2a.4 | covered above | - | - | - | Suite 88/88 | - | - |
+| 2a.5 | `test/app.test.ts` (existing) | Integration | green | n/a | Passed unchanged | n/a | Clean |
+
+### Deviations from design/tasks
+- `classifyEvent` takes `now` (epoch ms) as a second argument so the D10 window stays pure; `app.ts` passes `now()`.
+- Result discriminant: `IssueNotice.kind` is one of the 4 kinds; `Ignored` is `{ kind: "ignored", reason, projectId }` (reason `not a notifiable event`, `assigned-at-create`, or `missing issue fields`).
+- `planMentions` returns `{ actor, assignee, cc }`; the actor is plain text everywhere (also when assignee), cc only for completed/canceled. `PersonLookup` returns `{ slackUserId, name } | null` (2b/3c will back it with `store.getPerson`).
+- Old logs (`kind=... actor_mapped=...`) dropped; `app.ts` now logs `Issue event: kind=<kind>` and `Issue event ignored: reason=<reason>`. Legacy `userMap` path kept in `app.ts` until 2b rewrites the route.
+- Copy change vs legacy: completed now reads "<actor> completó ... ✅: ... · cc ..." (legacy used the assignee as subject and "resolvió"), per proposal mockups.
+- Size: 307 additions + 396 deletions (~703 changed); deletions are the replaced legacy events code/tests.
+
+### Status
+Slice 2a: 5/5 tasks complete (18/18 across 1a, 1b, 2a counting 1a=6, 1b=7). Slices 2b-6 remain. Suite 88/88, typecheck clean.
+
+### Batch 3b - Review fixes on slice 2a (strict TDD, tests first)
+- Removed the 10s created/assigned suppression and the `now` param from `classifyEvent`: it suppressed deliberate assignments made seconds after creating an unassigned issue. D10 is now implemented in slice 2b via the event log (suppress `assigned` only if a `created` notice exists for the same issue id and assignee id). design.md D10 and tasks.md (new 2b.2a) updated; `assigned-at-create` reason is out of 2a.
+- Restored the old rule: assignee/cc with no name and no Slack mapping is dropped. `renderNotice` returns `string | null` (null for `assigned` without a writable assignee; `app.ts` logs ignored with `assignee not resolvable`). "Alguien" remains only the actor fallback.
+- `app.ts`: no logging for non-Issue payloads; Issue events log `Issue event: kind= actor= actor_mapped= assignee= assignee_mapped=` and `Issue event ignored: action= reason=`.
+- New app tests with ids `__proto__`, `constructor`, `toString` prove the `Object.hasOwn` guard.
+- Suite 95/95, typecheck clean.
