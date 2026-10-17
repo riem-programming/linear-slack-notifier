@@ -1,101 +1,91 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeProjectRoutes, describeUserMap, loadConfig } from "../src/config.ts";
+import { loadConfig } from "../src/config.ts";
 
-const URL_A = "https://hooks.slack.com/services/T000/B000/AAA";
-const URL_B = "https://hooks.slack.com/services/T000/B000/BBB";
-const routes = JSON.stringify({ "proj-a": URL_A, "proj-b": URL_B });
-const base = { LINEAR_WEBHOOK_SECRET: "a", SLACK_PROJECT_WEBHOOKS: routes };
+const base = {
+  LINEAR_WEBHOOK_SECRET: "lw",
+  LINEAR_API_KEY: "lk",
+  SLACK_BOT_TOKEN: "xoxb-1",
+  SLACK_SIGNING_SECRET: "ss",
+  ADMIN_PASSWORD: "pw",
+};
 
-test("loads required vars and defaults port to 3000", () => {
-  const config = loadConfig(base);
-  assert.deepEqual(config, {
-    linearWebhookSecret: "a",
-    slackProjectWebhooks: { "proj-a": URL_A, "proj-b": URL_B },
+test("loads required secrets and applies defaults", () => {
+  assert.deepEqual(loadConfig(base), {
+    linearWebhookSecret: "lw",
+    linearApiKey: "lk",
+    slackBotToken: "xoxb-1",
+    slackSigningSecret: "ss",
+    adminPassword: "pw",
     port: 3000,
-    slackUserMap: {},
+    databasePath: "/data/notifier.db",
+    backupDir: "/data/backups",
+    backupKeep: 7,
+    eventLogRetentionDays: 30,
+    statusTimeZone: "America/Lima",
+    adminEnvLabel: null,
+    sessionSecret: null,
   });
 });
 
-test("reads PORT", () => {
-  assert.equal(loadConfig({ ...base, PORT: "8080" }).port, 8080);
-});
-
-test("throws naming the missing variable", () => {
-  assert.throws(() => loadConfig({ SLACK_PROJECT_WEBHOOKS: routes }), /LINEAR_WEBHOOK_SECRET/);
-  assert.throws(() => loadConfig({ LINEAR_WEBHOOK_SECRET: "a" }), /SLACK_PROJECT_WEBHOOKS/);
-});
-
-test("throws on invalid PORT", () => {
-  assert.throws(() => loadConfig({ ...base, PORT: "abc" }), /PORT/);
-});
-
-test("SLACK_PROJECT_WEBHOOKS rejects invalid JSON, non-objects and empty objects", () => {
-  for (const raw of ["{nope", "[]", "\"x\"", "null", "{}"]) {
-    assert.throws(() => loadConfig({ ...base, SLACK_PROJECT_WEBHOOKS: raw }), /SLACK_PROJECT_WEBHOOKS/);
-  }
-});
-
-test("SLACK_PROJECT_WEBHOOKS rejects bad URLs, names the key and never leaks the value", () => {
-  for (const bad of ["http://hooks.slack.com/x", "https://evil.example/x", "secret-value", 5, null]) {
-    const raw = JSON.stringify({ "bad-key": bad });
+test("throws naming each missing secret and never echoes values", () => {
+  for (const name of Object.keys(base)) {
+    const env: Record<string, string> = { ...base };
+    delete env[name];
     assert.throws(
-      () => loadConfig({ ...base, SLACK_PROJECT_WEBHOOKS: raw }),
-      (error: Error) => /bad-key/.test(error.message) && !error.message.includes("secret-value") && !error.message.includes("evil.example"),
+      () => loadConfig(env),
+      (error: Error) => error.message.includes(name) && !Object.values(base).some((v) => error.message.includes(`=${v}`)),
     );
   }
 });
 
-test("SLACK_PROJECT_WEBHOOKS keeps a __proto__ key as a regular own key", () => {
-  const { slackProjectWebhooks } = loadConfig({ ...base, SLACK_PROJECT_WEBHOOKS: `{"__proto__":"${URL_A}"}` });
-  assert.equal(Object.hasOwn(slackProjectWebhooks, "__proto__"), true);
-  assert.equal(Object.getPrototypeOf(slackProjectWebhooks), Object.prototype);
+test("reads optional overrides", () => {
+  const config = loadConfig({
+    ...base,
+    PORT: "8080",
+    DATABASE_PATH: "/tmp/x.db",
+    BACKUP_DIR: "/tmp/b",
+    BACKUP_KEEP: "3",
+    EVENT_LOG_RETENTION_DAYS: "10",
+    STATUS_TIME_ZONE: "UTC",
+  });
+  assert.equal(config.port, 8080);
+  assert.equal(config.databasePath, "/tmp/x.db");
+  assert.equal(config.backupDir, "/tmp/b");
+  assert.equal(config.backupKeep, 3);
+  assert.equal(config.eventLogRetentionDays, 10);
+  assert.equal(config.statusTimeZone, "UTC");
 });
 
-test("SLACK_WEBHOOK_URL is no longer accepted as a fallback", () => {
-  assert.throws(
-    () => loadConfig({ LINEAR_WEBHOOK_SECRET: "a", SLACK_WEBHOOK_URL: URL_A } as Record<string, string>),
-    /SLACK_PROJECT_WEBHOOKS/,
-  );
+test("rejects invalid numeric values and time zones, naming the variable", () => {
+  assert.throws(() => loadConfig({ ...base, PORT: "abc" }), /PORT/);
+  assert.throws(() => loadConfig({ ...base, PORT: "70000" }), /PORT/);
+  assert.throws(() => loadConfig({ ...base, BACKUP_KEEP: "0" }), /BACKUP_KEEP/);
+  assert.throws(() => loadConfig({ ...base, EVENT_LOG_RETENTION_DAYS: "-1" }), /EVENT_LOG_RETENTION_DAYS/);
+  assert.throws(() => loadConfig({ ...base, EVENT_LOG_RETENTION_DAYS: "1.5" }), /EVENT_LOG_RETENTION_DAYS/);
+  assert.throws(() => loadConfig({ ...base, STATUS_TIME_ZONE: "Not/AZone" }), /STATUS_TIME_ZONE/);
 });
 
-test("describeProjectRoutes reports the entry count without URLs", () => {
-  assert.equal(describeProjectRoutes({ a: URL_A, b: URL_B }), "Slack project routes: 2 entries");
+test("legacy SLACK_PROJECT_WEBHOOKS and SLACK_USER_MAP are ignored, even when malformed", () => {
+  const config = loadConfig({ ...base, SLACK_PROJECT_WEBHOOKS: "{nope", SLACK_USER_MAP: "[]" });
+  assert.equal("slackProjectWebhooks" in config, false);
+  assert.equal("slackUserMap" in config, false);
 });
 
-test("SLACK_USER_MAP parses a valid map", () => {
-  const config = loadConfig({ ...base, SLACK_USER_MAP: JSON.stringify({ "id-1": "U0C5VPH1D7F", "id-2": "W123ABC" }) });
-  assert.deepEqual(config.slackUserMap, { "id-1": "U0C5VPH1D7F", "id-2": "W123ABC" });
+test("adminEnvLabel is trimmed, cut to 40 characters and null when unset or blank", () => {
+  assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "  Staging " }).adminEnvLabel, "Staging");
+  assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "x".repeat(60) }).adminEnvLabel, "x".repeat(40));
+  assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "   " }).adminEnvLabel, null);
+  assert.equal(loadConfig({ ...base, ADMIN_ENV_LABEL: "" }).adminEnvLabel, null);
+  assert.equal(loadConfig(base).adminEnvLabel, null);
 });
 
-test("SLACK_USER_MAP empty or blank yields an empty map", () => {
-  assert.deepEqual(loadConfig({ ...base, SLACK_USER_MAP: "" }).slackUserMap, {});
-  assert.deepEqual(loadConfig({ ...base, SLACK_USER_MAP: "  " }).slackUserMap, {});
-  assert.deepEqual(loadConfig({ ...base, SLACK_USER_MAP: "{}" }).slackUserMap, {});
-});
-
-test("SLACK_USER_MAP rejects invalid JSON and non-objects", () => {
-  assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "{nope" }), /SLACK_USER_MAP/);
-  assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "[]" }), /SLACK_USER_MAP/);
-  assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "\"x\"" }), /SLACK_USER_MAP/);
-  assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "null" }), /SLACK_USER_MAP/);
-});
-
-test("SLACK_USER_MAP rejects invalid Slack IDs and names the key", () => {
-  assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "{\"bad-key\":\"u123\"}" }), /bad-key/);
-  assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "{\"k\":5}" }), /SLACK_USER_MAP/);
-  assert.throws(() => loadConfig({ ...base, SLACK_USER_MAP: "{\"k\":\"<@U1>\"}" }), /SLACK_USER_MAP/);
-});
-
-test("SLACK_USER_MAP keeps a __proto__ key as a regular own key", () => {
-  const { slackUserMap } = loadConfig({ ...base, SLACK_USER_MAP: '{"__proto__":"U123"}' });
-  assert.equal(Object.hasOwn(slackUserMap, "__proto__"), true);
-  assert.equal(Object.getPrototypeOf(slackUserMap), Object.prototype);
-});
-
-test("describeUserMap reports not set, empty and entry counts without values", () => {
-  assert.equal(describeUserMap(undefined, {}), "SLACK_USER_MAP not set");
-  assert.equal(describeUserMap("", {}), "SLACK_USER_MAP set but empty");
-  assert.equal(describeUserMap("{}", {}), "Slack user map: 0 entries");
-  assert.equal(describeUserMap("x", { a: "U1", b: "U2" }), "Slack user map: 2 entries");
+test("sessionSecret is null when unset or shorter than 32 bytes", () => {
+  assert.equal(loadConfig(base).sessionSecret, null);
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "x".repeat(31) }).sessionSecret, null);
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "x".repeat(32) }).sessionSecret, "x".repeat(32));
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "é".repeat(16) }).sessionSecret, "é".repeat(16));
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "é".repeat(15) }).sessionSecret, null);
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "  " + "x".repeat(32) + "\n" }).sessionSecret, "x".repeat(32));
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: " " + "x".repeat(31) + " " }).sessionSecret, null);
 });

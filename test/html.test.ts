@@ -1,0 +1,33 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { html, raw } from "../src/html.ts";
+
+test("html escapes interpolated values by default", () => {
+  const hostile = `<script>alert("x")</script> & 'q'`;
+  assert.equal(
+    html`<p>${hostile}</p>`.value,
+    "<p>&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; &#39;q&#39;</p>",
+  );
+});
+
+test("html leaves the template literal text untouched and stringifies non-strings", () => {
+  assert.equal(html`<b>${42}</b>${null}${undefined}`.value, "<b>42</b>");
+});
+
+test("raw() opts out of escaping and nested html is not double-escaped", () => {
+  assert.equal(html`<div>${raw("<i>ok</i>")}</div>`.value, "<div><i>ok</i></div>");
+  const inner = html`<li>${"a<b"}</li>`;
+  assert.equal(html`<ul>${inner}</ul>`.value, "<ul><li>a&lt;b</li></ul>");
+});
+
+test("arrays are joined, each item escaped", () => {
+  const items = ["x<", "y"].map((item) => html`<li>${item}</li>`);
+  assert.equal(html`<ul>${items}</ul>`.value, "<ul><li>x&lt;</li><li>y</li></ul>");
+  assert.equal(html`${["<a>", "b"]}`.value, "&lt;a&gt;b");
+});
+
+test("only html/raw output is trusted: a look-alike { value } object is escaped", () => {
+  const forged = { value: "<script>alert(1)</script>" };
+  assert.equal(html`<p>${forged}</p>`.value, "<p>[object Object]</p>");
+  assert.equal(html`<p>${[forged]}</p>`.value, "<p>[object Object]</p>");
+});

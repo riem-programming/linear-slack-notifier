@@ -1,8 +1,17 @@
 export type Config = {
   linearWebhookSecret: string;
-  slackProjectWebhooks: Record<string, string>;
+  linearApiKey: string;
+  slackBotToken: string;
+  slackSigningSecret: string;
+  adminPassword: string;
   port: number;
-  slackUserMap: Record<string, string>;
+  databasePath: string;
+  backupDir: string;
+  backupKeep: number;
+  eventLogRetentionDays: number;
+  statusTimeZone: string;
+  adminEnvLabel: string | null;
+  sessionSecret: string | null;
 };
 
 type Env = Record<string, string | undefined>;
@@ -13,67 +22,50 @@ const required = (env: Env, name: string): string => {
   return value;
 };
 
-const SLACK_ID_PATTERN = /^[UW][A-Z0-9]+$/;
+const integer = (env: Env, name: string, fallback: number, min: number, max = Number.MAX_SAFE_INTEGER): number => {
+  if (!env[name]) return fallback;
+  const value = Number(env[name]);
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new Error(`Invalid ${name}: must be an integer between ${min} and ${max}`);
+  }
+  return value;
+};
 
-const SLACK_WEBHOOK_PREFIX = "https://hooks.slack.com/";
-
-const parseProjectWebhooks = (raw: string): Record<string, string> => {
-  let parsed: unknown;
+const timeZone = (env: Env, fallback: string): string => {
+  const value = env.STATUS_TIME_ZONE || fallback;
   try {
-    parsed = JSON.parse(raw);
+    new Intl.DateTimeFormat("en", { timeZone: value });
   } catch {
-    throw new Error("Invalid SLACK_PROJECT_WEBHOOKS: must be valid JSON");
+    throw new Error("Invalid STATUS_TIME_ZONE: must be an IANA time zone like America/Lima");
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Invalid SLACK_PROJECT_WEBHOOKS: must be a JSON object of Linear project ID to Slack webhook URL");
-  }
-  const entries: [string, string][] = [];
-  for (const [projectId, url] of Object.entries(parsed)) {
-    if (typeof url !== "string" || !url.startsWith(SLACK_WEBHOOK_PREFIX)) {
-      throw new Error(`Invalid SLACK_PROJECT_WEBHOOKS: value for key "${projectId}" must be a Slack webhook URL starting with ${SLACK_WEBHOOK_PREFIX}`);
-    }
-    entries.push([projectId, url]);
-  }
-  if (entries.length === 0) throw new Error("Invalid SLACK_PROJECT_WEBHOOKS: must have at least one entry");
-  return Object.fromEntries(entries);
+  return value;
 };
 
-const parseUserMap = (raw: string | undefined): Record<string, string> => {
-  if (!raw || raw.trim() === "") return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error("Invalid SLACK_USER_MAP: must be valid JSON");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Invalid SLACK_USER_MAP: must be a JSON object of Linear user ID to Slack member ID");
-  }
-  const entries: [string, string][] = [];
-  for (const [linearId, slackId] of Object.entries(parsed)) {
-    if (typeof slackId !== "string" || !SLACK_ID_PATTERN.test(slackId)) {
-      throw new Error(`Invalid SLACK_USER_MAP: value for key "${linearId}" must be a Slack member ID like U0123ABC`);
-    }
-    entries.push([linearId, slackId]);
-  }
-  return Object.fromEntries(entries);
+const ENV_LABEL_MAX = 40;
+
+const envLabel = (env: Env): string | null => env.ADMIN_ENV_LABEL?.trim().slice(0, ENV_LABEL_MAX) || null;
+
+export const SESSION_SECRET_MIN_BYTES = 32;
+
+// A missing or short secret does not stop boot: the admin stays disabled (fails closed) and webhooks keep working.
+const sessionSecret = (env: Env): string | null => {
+  const value = env.SESSION_SECRET?.trim();
+  return value && Buffer.byteLength(value) >= SESSION_SECRET_MIN_BYTES ? value : null;
 };
 
-export const loadConfig = (env: Env = process.env): Config => {
-  const linearWebhookSecret = required(env, "LINEAR_WEBHOOK_SECRET");
-  const slackProjectWebhooks = parseProjectWebhooks(required(env, "SLACK_PROJECT_WEBHOOKS"));
-  const port = env.PORT ? Number(env.PORT) : 3000;
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error("Invalid PORT: must be an integer between 1 and 65535");
-  }
-  return { linearWebhookSecret, slackProjectWebhooks, port, slackUserMap: parseUserMap(env.SLACK_USER_MAP) };
-};
-
-export const describeUserMap = (raw: string | undefined, map: Record<string, string>): string => {
-  if (raw === undefined) return "SLACK_USER_MAP not set";
-  if (raw.trim() === "") return "SLACK_USER_MAP set but empty";
-  return `Slack user map: ${Object.keys(map).length} entries`;
-};
-
-export const describeProjectRoutes = (routes: Record<string, string>): string =>
-  `Slack project routes: ${Object.keys(routes).length} entries`;
+// SLACK_PROJECT_WEBHOOKS and SLACK_USER_MAP are legacy: they are never read here, so a stale value cannot break startup.
+export const loadConfig = (env: Env = process.env): Config => ({
+  linearWebhookSecret: required(env, "LINEAR_WEBHOOK_SECRET"),
+  linearApiKey: required(env, "LINEAR_API_KEY"),
+  slackBotToken: required(env, "SLACK_BOT_TOKEN"),
+  slackSigningSecret: required(env, "SLACK_SIGNING_SECRET"),
+  adminPassword: required(env, "ADMIN_PASSWORD"),
+  port: integer(env, "PORT", 3000, 1, 65535),
+  databasePath: env.DATABASE_PATH || "/data/notifier.db",
+  backupDir: env.BACKUP_DIR || "/data/backups",
+  backupKeep: integer(env, "BACKUP_KEEP", 7, 1),
+  eventLogRetentionDays: integer(env, "EVENT_LOG_RETENTION_DAYS", 30, 1),
+  statusTimeZone: timeZone(env, "America/Lima"),
+  adminEnvLabel: envLabel(env),
+  sessionSecret: sessionSecret(env),
+});

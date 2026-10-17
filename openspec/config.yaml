@@ -1,0 +1,52 @@
+schema: spec-driven
+
+context: |
+  Project: linear-slack-notifier (receives Linear webhooks, posts custom messages to Slack)
+  Stack: Node >=24 (runs .ts directly, no build step), TypeScript 7 (strict, noEmit), ESM, pnpm
+  Runtime deps: none (devDependencies: typescript, @types/node)
+  Architecture: flat modules in src/ (app, config, events, server, signature, slack)
+  Testing: node:test via `node --test`, tests in test/*.test.ts; no coverage/lint/format tools
+  Deploy: Dockerfile (node:24-alpine) on Dokploy; healthcheck GET /health
+
+strict_tdd: true
+
+testing:
+  runner:
+    command: "pnpm test"
+    framework: "node:test (node --test \"test/**/*.test.ts\")"
+  layers:
+    unit: true
+    integration: false
+    e2e: false
+  coverage:
+    available: false
+    command: ""
+  quality:
+    linter: ""
+    type_checker: "pnpm typecheck"
+    formatter: ""
+
+rules:
+  proposal:
+    - Include rollback plan for risky changes
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+  design:
+    - Document architecture decisions with rationale
+    - Keep runtime dependency-free unless explicitly justified (Dockerfile does not install deps)
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+  apply:
+    - Follow existing code patterns (ESM, explicit .ts import extensions, erasableSyntaxOnly)
+    - No TS enums/namespaces/parameter properties (Node strips types only)
+    tdd: true
+    test_command: "pnpm test"
+  verify:
+    test_command: "pnpm test"
+    typecheck_command: "pnpm typecheck"
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
