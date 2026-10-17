@@ -44,14 +44,25 @@ test("postMessage retries once on 429 when Retry-After is at most 5 seconds", as
 
 test("postMessage does not retry on 429 with a long Retry-After, or retry twice", async () => {
   const long = fakeFetch(json({ ok: false }, { status: 429, headers: { "retry-after": "30" } }));
-  await assert.rejects(createSlackApi({ token: "t", fetch: long.fetch }).postMessage("C1", "x"), { message: "ratelimited" });
+  await assert.rejects(createSlackApi({ token: "t", fetch: long.fetch }).postMessage("C1", "x"), { message: "ratelimited (Retry-After 30s)" });
   assert.equal(long.calls.length, 1);
   const twice = fakeFetch(
     json({ ok: false }, { status: 429, headers: { "retry-after": "1" } }),
     json({ ok: false }, { status: 429, headers: { "retry-after": "1" } }),
   );
   await assert.rejects(createSlackApi({ token: "t", fetch: twice.fetch, sleep: async () => {} }).postMessage("C1", "x"), {
-    message: "ratelimited",
+    message: "ratelimited (Retry-After 1s)",
   });
   assert.equal(twice.calls.length, 2);
+});
+
+test("postMessage backs off by a default delay when a 429 has no usable Retry-After", async () => {
+  const cases: Record<string, string>[] = [{}, { "retry-after": "soon" }, { "retry-after": "-3" }];
+  for (const headers of cases) {
+    const waits: number[] = [];
+    const { fetch, calls } = fakeFetch(json({ ok: false }, { status: 429, headers }), json({ ok: true }));
+    await createSlackApi({ token: "t", fetch, sleep: async (ms) => void waits.push(ms) }).postMessage("C1", "x");
+    assert.equal(calls.length, 2);
+    assert.deepEqual(waits, [1000]);
+  }
 });

@@ -136,7 +136,7 @@ test("beginEvent claims a delivery once and finishEvent records the final result
   assert.equal(store.recentEvents().length, 1);
 });
 
-test("hasNotifiedCreate matches only a notified created event for the same issue and assignee", () => {
+test("hasNotifiedCreate matches only a delivered or in-flight created event for the same issue and assignee", () => {
   const { store } = setup();
   store.insertEvent(entry("d1", { issueId: "i1", assigneeId: "u1" }));
   store.insertEvent(entry("d2", { issueId: "i2", assigneeId: "u1", outcome: "skipped", reason: "project-not-linked", targets: [] }));
@@ -148,4 +148,35 @@ test("hasNotifiedCreate matches only a notified created event for the same issue
   assert.equal(store.hasNotifiedCreate("nope", "u1"), false);
   assert.equal(store.recentEvents()[2]?.issueId, "i1");
   assert.equal(store.recentEvents()[2]?.assigneeId, "u1");
+});
+
+test("hasNotifiedCreate also matches an in-flight created row and a partially delivered one", () => {
+  const { store } = setup();
+  const base = { assigneeId: "u1", kind: "created" } as const;
+  store.insertEvent(entry("a", { ...base, issueId: "inflight", outcome: "failed", reason: "in-flight", targets: [] }));
+  store.insertEvent(entry("b", {
+    ...base, issueId: "partial", outcome: "failed", reason: "post-failed",
+    targets: [{ channel: "C1", outcome: "notified" }, { channel: "C2", outcome: "failed", error: "not_in_channel" }],
+  }));
+  store.insertEvent(entry("c", {
+    ...base, issueId: "allfailed", outcome: "failed", reason: "post-failed",
+    targets: [{ channel: "C1", outcome: "failed", error: "not_in_channel" }],
+  }));
+  assert.equal(store.hasNotifiedCreate("inflight", "u1"), true);
+  assert.equal(store.hasNotifiedCreate("partial", "u1"), true);
+  assert.equal(store.hasNotifiedCreate("allfailed", "u1"), false);
+});
+
+test("sweepInterrupted relabels only old in-flight rows", () => {
+  const db = openDb(":memory:");
+  let tick = Date.parse("2026-03-31T12:00:00.000Z");
+  const store = createStore(db, () => tick);
+  store.insertEvent(entry("old", { outcome: "failed", reason: "in-flight", targets: [] }));
+  store.insertEvent(entry("done", { outcome: "failed", reason: "post-failed", targets: [] }));
+  tick += 6 * 60_000;
+  store.insertEvent(entry("fresh", { outcome: "failed", reason: "in-flight", targets: [] }));
+  assert.equal(store.sweepInterrupted(5 * 60_000), 1);
+  const reasons = Object.fromEntries(store.recentEvents().map((e) => [e.deliveryId, e.reason]));
+  assert.deepEqual(reasons, { old: "interrupted", done: "post-failed", fresh: "in-flight" });
+  assert.equal(store.sweepInterrupted(5 * 60_000), 0);
 });

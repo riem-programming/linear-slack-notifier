@@ -45,7 +45,10 @@ export type Store = {
   // Claims a delivery before posting; returns the row id, or null when the delivery id was already recorded.
   beginEvent: (entry: EventEntry) => number | null;
   finishEvent: (id: number, result: EventResult) => void;
+  // True when a created notice for this issue and assignee was delivered to at least one channel or is still in flight.
   hasNotifiedCreate: (issueId: string, assigneeId: string) => boolean;
+  // Relabels in-flight rows older than the window as interrupted (the process died mid-delivery). Returns rows changed.
+  sweepInterrupted: (olderThanMs: number) => number;
   recentEvents: (limit?: number) => LoggedEvent[];
 };
 
@@ -146,9 +149,19 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
         result.outcome, result.reason, JSON.stringify(result.targets), id,
       );
     },
+    sweepInterrupted: (olderThanMs) =>
+      Number(
+        db
+          .prepare("UPDATE event_log SET reason = 'interrupted' WHERE outcome = 'failed' AND reason = 'in-flight' AND received_at < ?")
+          .run(new Date(now() - olderThanMs).toISOString()).changes,
+      ),
     hasNotifiedCreate: (issueId, assigneeId) =>
       all(
-        "SELECT 1 AS hit FROM event_log WHERE kind = 'created' AND outcome = 'notified' AND issue_id = ? AND assignee_id = ? LIMIT 1",
+        `SELECT 1 AS hit FROM event_log WHERE kind = 'created' AND issue_id = ? AND assignee_id = ?
+         AND (outcome = 'notified'
+           OR (outcome = 'failed' AND (reason = 'in-flight'
+             OR EXISTS (SELECT 1 FROM json_each(event_log.targets) WHERE json_extract(value, '$.outcome') = 'notified'))))
+         LIMIT 1`,
         issueId, assigneeId,
       ).length > 0,
     recentEvents: (limit = DEFAULT_RECENT_EVENTS) =>

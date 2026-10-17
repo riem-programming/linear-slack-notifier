@@ -17,7 +17,7 @@ type AppOptions = {
   now?: () => number;
   // Runs work after the HTTP ack. Production schedules it on the event loop; tests collect and await it.
   defer?: (task: () => Promise<void>) => void;
-  logger?: Pick<Console, "info" | "error">;
+  logger?: Pick<Console, "info" | "warn" | "error">;
 };
 
 const DEFAULT_MAX_BODY_BYTES = 1_000_000;
@@ -64,7 +64,7 @@ export const createApp = ({
     );
   };
 
-  const processEvent = async (payload: unknown, deliveryId: string | null): Promise<void> => {
+  const processEventUnsafe = async (payload: unknown, deliveryId: string | null): Promise<void> => {
     const result = classifyEvent(payload);
     const notice = result.kind === "ignored" ? null : result;
     const entry: EventEntry = {
@@ -92,8 +92,22 @@ export const createApp = ({
       logger.error(`Failed to process event: ${errorMessage(error)}`);
       outcome = { outcome: "failed", reason: "internal-error", targets: [] };
     }
-    store.finishEvent(id, outcome);
+    try {
+      store.finishEvent(id, outcome);
+    } catch (error) {
+      logger.error(`Failed to record event result: ${errorMessage(error)}`);
+      return;
+    }
     logger.info(`Event processed: kind=${entry.kind} outcome=${outcome.outcome}${outcome.reason ? ` reason=${outcome.reason}` : ""}`);
+  };
+
+  // Delivery is at-most-once per Linear delivery id: nothing here may reject, whatever `defer` does with the task.
+  const processEvent = async (payload: unknown, deliveryId: string | null): Promise<void> => {
+    try {
+      await processEventUnsafe(payload, deliveryId);
+    } catch (error) {
+      logger.error(`Failed to process event: ${errorMessage(error)}`);
+    }
   };
 
   const handleWebhook = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -128,6 +142,7 @@ export const createApp = ({
     }
 
     const deliveryId = headerValue(req.headers["linear-delivery"]);
+    if (deliveryId === null) logger.warn("Linear-Delivery header missing or repeated: event will not be deduplicated");
     send(res, 200, { ok: true });
     runLater(() => processEvent(payload, deliveryId));
   };

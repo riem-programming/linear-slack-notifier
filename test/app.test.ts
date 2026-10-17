@@ -9,13 +9,14 @@ import { createStore } from "../src/store.ts";
 import type { Store } from "../src/store.ts";
 
 const secret = "s3cret";
-const silent = { info: () => {}, error: () => {} };
+const silent = { info: () => {}, warn: () => {}, error: () => {} };
+type Logger = { info: (line: string) => void; warn: (line: string) => void; error: (line: string) => void };
 
 type Harness = { base: string; store: Store; sent: string[]; settle: () => Promise<void> };
 
 const withApp = async (
   run: (h: Harness) => Promise<void>,
-  options: { failChannels?: string[]; logger?: { info: (line: string) => void; error: (line: string) => void } } = {},
+  options: { failChannels?: string[]; logger?: Logger; wrapStore?: (store: Store) => Store } = {},
 ): Promise<void> => {
   const store = createStore(openDb(":memory:"));
   store.upsertProject({ id: "proj-1", name: "Web" });
@@ -30,7 +31,7 @@ const withApp = async (
   };
   const pending: (() => Promise<void>)[] = [];
   const server = createApp({
-    secret, store, slack, maxBodyBytes: 2_000, now: () => 1_000_000, logger: options.logger ?? silent,
+    secret, store: options.wrapStore?.(store) ?? store, slack, maxBodyBytes: 2_000, now: () => 1_000_000, logger: options.logger ?? silent,
     defer: (task) => void pending.push(task),
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -301,5 +302,42 @@ test("oversized chunked body without content-length returns 413", async () => {
       req.end();
     });
     assert.equal(status, 413);
+  });
+});
+
+test("a store failure while finishing the event is logged and never rejects the deferred task", async () => {
+  const errors: string[] = [];
+  await withApp(async (h) => {
+    const body = payload(1_000_000);
+    assert.equal((await post(h.base, body, sign(body), "d-1")).status, 200);
+    await h.settle();
+    assert.ok(errors.some((line) => line.includes("disk full")));
+  }, {
+    logger: { ...silent, error: (line) => void errors.push(line) },
+    wrapStore: (store) => ({ ...store, finishEvent: () => { throw new Error("disk full"); } }),
+  });
+});
+
+test("a missing or repeated Linear-Delivery header logs a warning but still processes the event", async () => {
+  const warnings: string[] = [];
+  await withApp(async (h) => {
+    await deliver(h, payload(1_000_000));
+    assert.equal(h.sent.length, 1);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0] as string, /Linear-Delivery/);
+    await deliver(h, payload(1_000_000), "d-1");
+    assert.equal(warnings.length, 1);
+  }, { logger: { ...silent, warn: (line) => void warnings.push(line) } });
+});
+
+test("a created notice still in flight suppresses the assigned notice that follows it", async () => {
+  await withApp(async (h) => {
+    h.store.beginEvent({
+      deliveryId: "d-1", kind: "created", issueIdentifier: "K-1", issueTitle: "T", projectId: "proj-1",
+      issueId: "iss-1", assigneeId: "u-beto", outcome: "failed", reason: "in-flight", targets: [],
+    });
+    await deliver(h, assignedBody({ id: "u-beto", name: "Beto" }), "d-2");
+    assert.deepEqual(h.sent, []);
+    assert.equal(h.store.recentEvents()[0]?.reason, "assigned-at-create");
   });
 });

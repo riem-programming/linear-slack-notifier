@@ -151,3 +151,13 @@ Mode: Strict TDD. Branch: `feat/kamaiti-77-slack-delivery-event-log` (base `orig
 
 ### Status
 Slice 2b: 6/6 tasks complete (24/24 across 1a, 1b, 2a, 2b). Slices 3a-6 remain. Suite 110/110, typecheck clean.
+
+### Batch 4b - Review fixes on slice 2b (strict TDD, tests first)
+- `hasNotifiedCreate` now also matches a `created` row that is in flight (Linear sends create and the assignee update back-to-back) or partially delivered (outcome failed with at least one notified target). Superseded the earlier deviation that required `notified`. Tests: in-flight, partial, all-failed, plus an app-level in-flight case.
+- `store.sweepInterrupted(5 min)` runs at startup in `server.ts` and relabels stale `in-flight` rows as `interrupted`.
+- Delivery guarantee: at-most-once per Linear delivery id (redeliveries deduped, failed posts not retried). Documented in design.md D9.
+- Slack 429: Retry-After is honored only when a finite non-negative number; a missing or invalid header backs off 1s (never immediate); the single retry happens only when the wait is <= 5s; otherwise the error includes `(Retry-After Ns)`.
+- The whole deferred `processEvent` is wrapped in one try/catch (finishEvent failure is logged), so a custom `defer` never sees a rejection. Mixed-result (one channel fails, one succeeds) app test already existed and still passes.
+- A missing or repeated `Linear-Delivery` header logs a warning (`AppOptions.logger` now includes `warn`).
+- Confirmed the unclassified reason string `not a notifiable event` matches the issue-notifications spec.
+- Suite 116/116, typecheck clean.
