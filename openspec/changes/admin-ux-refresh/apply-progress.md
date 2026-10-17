@@ -191,3 +191,22 @@ Completed: 4b.1, 4b.2, 4b.3, 4b.4, plus deferred 4a.2 and the old route removal.
 - In the dialog the project search filters rows on the client (`data-fold`), so unsaved checkbox changes survive; the no-JS GET `?q=` path is unchanged. The sheet "Cerrar" link has `data-close`; `load()` ignores clicks while a fetch is in flight; the sheet response sends `Vary: X-Admin-Fragment`.
 - Project ids are not format-checked on removal (Linear ids are UUIDs); they must exist in the store.
 - Tests: `pnpm test` 391/391, `pnpm typecheck` clean.
+
+## Batch 9: Slice 5a (branch `feat/kamaiti-101-slack-members-cache`, stacked on slice 4b, Linear KAMAITI-101)
+
+Completed: 5a.1, 5a.2, 5a.3, 5a.4. Remaining: slice 5b.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 5a.1 | `test/memo.test.ts` | Unit (injected clock) | 391 existing | Written, failed (module missing) | 395/395 | TTL boundary (1000 ok, 1001 reload), shared in-flight, 30s failure replay then retry, non-Error rejection wrapped in a fixed error | `linear.ts` uses `memo.ts`; existing linear tests unchanged and green |
+| 5a.2 | `test/slack.test.ts` | Unit (fake fetch) | 395 existing | Written, 7 failed (method missing) | 404/404 | mapping and exclusions (deleted, bot, app user, USLACKBOT), folded sort, name fallbacks, limit=200 and cursor, 20-page cap, 10-min TTL and shared in-flight, short 429 retry, ok:false fixed error and 30s replay | None needed |
+| 5a.3 | `test/members.test.ts`, `test/slack.test.ts` | Unit (pure) | | Written with 5a.2 | 404/404, typecheck clean | name/handle/email, accents and case, blank query, no match, limit default 50 and custom, stale list served with a warning on refresh failure | None needed |
+| 5a.4 | covered above | | | | | | |
+
+### Notes and deviations
+- `memo(load, { ttl, now })` replaces the closure inside `createLinearApi`; the fallback error for non-Error rejections is now "Request failed" (was "Linear request failed"; unreachable in practice, untested before).
+- Member shape is `{ id, name, handle, email | null }` (as requested for this slice), not the design's `realName`/`displayName` pair: `name` is `real_name`, then `profile.display_name`, then the handle. Search covers name, handle and email.
+- `filterMembers` lives in `src/members.ts` with the `SlackMember` type; `listMembers` is in `slack.ts` (`createSlackApi` gained optional `now` and `logger`).
+- Stale-list fallback is in `listMembers`, not in `memo`: the last good list is kept outside the memo and served with a fixed warning when a refresh fails.
+- Not wired into `admin.ts`/`app.ts` (5b). The `SlackApi` type gained `listMembers`; existing partial fakes still typecheck.
