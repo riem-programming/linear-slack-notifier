@@ -44,12 +44,12 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(admin): serve versioned static assets with strict CSP`
 - Linear ticket: "Admin: assets estáticos versionados y CSP estricta" - Servir admin.css/admin.js con hash de versión y caché inmutable, y endurecer la CSP sin unsafe-inline.
 - Files: `src/assets.ts`, `src/public/admin.js` (skeleton), `src/public/admin.css` (placeholder), `src/admin.ts`, `src/config.ts`, `test/assets.test.ts`, `test/config.test.ts`, `test/admin.test.ts`.
-- [ ] 1a.1 RED: assets test: `v` hash match gives immutable cache, other gives `no-cache`, nosniff and Content-Type set, no session needed, unknown name or path separators gives 404.
-- [ ] 1a.2 RED: config test: `adminEnvLabel` trimmed, cut to 40 chars, `null` when unset.
-- [ ] 1a.3 RED: admin test: CSP header equals U2 value and has no `unsafe-inline`.
-- [ ] 1a.4 GREEN: create `src/assets.ts` (`assetUrl`, `serveAsset`), skeleton `admin.js`, route `/admin/assets/*` before auth in `admin.ts`.
-- [ ] 1a.5 GREEN: add `adminEnvLabel` to `src/config.ts`; set the new CSP in `admin.ts`.
-- [ ] 1a.6 REFACTOR, then run verification.
+- [x] 1a.1 RED: assets test: `v` hash match gives immutable cache, other gives `no-cache`, nosniff and Content-Type set, no session needed, unknown name or path separators gives 404.
+- [x] 1a.2 RED: config test: `adminEnvLabel` trimmed, cut to 40 chars, `null` when unset.
+- [x] 1a.3 RED: admin test: CSP header equals U2 value and has no `unsafe-inline`.
+- [x] 1a.4 GREEN: create `src/assets.ts` (`assetUrl`, `serveAsset`), skeleton `admin.js`, route `/admin/assets/*` before auth in `admin.ts`.
+- [x] 1a.5 GREEN: add `adminEnvLabel` to `src/config.ts`; set the new CSP in `admin.ts`.
+- [x] 1a.6 REFACTOR, then run verification.
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: `/admin/assets/admin.css?v=x` loads without login (200); unknown asset 404; existing admin pages still work (Basic Auth still active) and their response headers show the new CSP. Pages may look unstyled if inline styles were in use; that is fixed in 1b.
 - USER prerequisites: none (optional `ADMIN_ENV_LABEL` can be set now).
