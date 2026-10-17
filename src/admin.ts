@@ -3,16 +3,17 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { checkBasicAuth, checkOrigin, csrfToken, verifyCsrf } from "./auth.ts";
 import { BodyTooLargeError, parseForm, readBody, redirect, send, sendHtml } from "./http.ts";
 import { html, layout } from "./html.ts";
-import type { Html, NavKey } from "./html.ts";
+import type { Html } from "./html.ts";
 import type { LinearApi } from "./linear.ts";
+import { clearOverride, setOverride, syncPeople } from "./people.ts";
 import type { SlackApi } from "./slack.ts";
-import type { Channel, LoggedEvent, Project, Store } from "./store.ts";
+import type { Channel, LoggedEvent, MatchSource, Person, Project, Store } from "./store.ts";
 
 type AdminOptions = {
   store: Store;
   // Optional ports: when missing, the matching upstream is reported as unavailable.
-  slack?: Partial<Pick<SlackApi, "listChannels">> | undefined;
-  linear?: Partial<Pick<LinearApi, "listProjects">> | undefined;
+  slack?: Partial<Pick<SlackApi, "listChannels" | "lookupUserByEmail">> | undefined;
+  linear?: Partial<Pick<LinearApi, "listProjects" | "listUsers">> | undefined;
   // Unset or empty disables the admin entirely.
   password: string | undefined;
   timeZone: string;
@@ -43,6 +44,8 @@ const REASONS: Record<string, string> = {
   "internal-error": "Error interno",
   "in-flight": "Envío en curso",
   interrupted: "Envío interrumpido por un reinicio",
+  "not a notifiable event": "Cambio sin aviso (no es creación, asignación, cierre ni cancelación)",
+  "missing issue fields": "Faltan datos de la incidencia (identificador, título o enlace)",
 };
 
 const formatTime = (iso: string, timeZone: string): string => {
@@ -70,15 +73,20 @@ const eventRow = (event: LoggedEvent, timeZone: string): Html => {
 </tr>`;
 };
 
-const statusPage = (store: Store, timeZone: string): Html => {
-  const events = store.recentEvents(RECENT_EVENTS);
+const statusPage = (store: Store, timeZone: string, showAll: boolean): Html => {
+  const events = store.recentEvents(RECENT_EVENTS, { hideUnclassified: !showAll });
+  const toggle = showAll
+    ? html`<a href="/admin/status">Ocultar eventos sin clasificar</a>`
+    : html`<a href="/admin/status?all=1">Mostrar todos los eventos</a>`;
+  // Unclassified rows are still stored; the empty state must not claim there is nothing when they are only hidden.
+  const empty = !showAll && store.recentEvents(1).length ? "No hay eventos para mostrar." : "Aún no hay eventos registrados.";
   const body = events.length
-    ? html`<p class="muted">Últimos ${events.length} eventos, del más reciente al más antiguo. Hora: ${timeZone}.</p>
+    ? html`<p class="muted">${events.length === 1 ? "Último evento" : `Últimos ${events.length} eventos`}, del más reciente al más antiguo. Hora: ${timeZone}. ${toggle}</p>
 <table>
 <thead><tr><th scope="col">Hora</th><th scope="col">Tipo</th><th scope="col">Incidencia</th><th scope="col">Resultado</th><th scope="col">Motivo</th><th scope="col">Canales</th></tr></thead>
 <tbody>${events.map((event) => eventRow(event, timeZone))}</tbody>
 </table>`
-    : html`<p>Aún no hay eventos registrados.</p>`;
+    : html`<p>${empty} ${toggle}</p>`;
   return layout({ title: "Estado", current: "status", body });
 };
 
@@ -90,6 +98,18 @@ const FLASH: Record<string, { ok: boolean; text: string }> = {
   exists: { ok: true, text: "El proyecto ya estaba vinculado a ese canal." },
   "not-found": { ok: false, text: "No se encontró el canal o el proyecto indicado." },
   "slack-error": { ok: false, text: "No se pudo consultar Slack. Se muestra la última lista guardada." },
+  synced: { ok: true, text: "Personas emparejadas con Slack por correo." },
+  "synced-partial": { ok: false, text: "Emparejado parcial: algunas personas no se pudieron consultar en Slack. Se conservaron sus vínculos anteriores." },
+  "linear-error": { ok: false, text: "No se pudo consultar Linear. Se muestran las personas guardadas." },
+  "override-set": { ok: true, text: "Vínculo manual guardado." },
+  "override-cleared": { ok: true, text: "Vínculo manual quitado; se volvió a emparejar por correo." },
+  "invalid-slack-id": { ok: false, text: "Ingrese un ID de miembro de Slack válido (por ejemplo U01ABC23DEF)." },
+  "person-not-found": { ok: false, text: "No se encontró a la persona indicada." },
+};
+
+const flashNotice = (status: string | null): Html | "" => {
+  const flash = status && Object.hasOwn(FLASH, status) ? FLASH[status] : undefined;
+  return flash ? html`<p class="${flash.ok ? "flash-ok" : "flash-error"}" role="status">${flash.text}</p>` : "";
 };
 
 type ChannelsView = {
@@ -123,8 +143,6 @@ const channelRow = (channel: Channel, view: ChannelsView): Html => {
 };
 
 const channelsPage = (view: ChannelsView): Html => {
-  const flash = view.flash && Object.hasOwn(FLASH, view.flash) ? FLASH[view.flash] : undefined;
-  const notice = flash ? html`<p class="${flash.ok ? "flash-ok" : "flash-error"}" role="status">${flash.text}</p>` : "";
   const warning = view.linearDown
     ? html`<p class="flash-error" role="alert">No se pudo consultar Linear. Solo se pueden vincular los proyectos ya conocidos.</p>`
     : "";
@@ -135,11 +153,39 @@ const channelsPage = (view: ChannelsView): Html => {
 <tbody>${view.channels.map((channel) => channelRow(channel, view))}</tbody>
 </table>`
     : html`<p>Aún no hay canales. Use «Actualizar canales desde Slack» para cargarlos.</p>`;
-  return layout({ title: "Canales", current: "channels", body: html`${notice}${warning}${refresh}${table}` });
+  return layout({ title: "Canales", current: "channels", body: html`${flashNotice(view.flash)}${warning}${refresh}${table}` });
 };
 
-const placeholder = (title: string, current: NavKey): Html =>
-  layout({ title, current, body: html`<p class="muted">Esta sección estará disponible próximamente.</p>` });
+const SOURCES: Record<MatchSource, string> = { auto: "Automático", manual: "Manual", unmatched: "Sin vincular" };
+
+const personForm = (csrf: string, person: Person, inner: Html): Html =>
+  html`<form method="post" action="/admin/people/override"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="user" value="${person.linearUserId}">${inner}</form>`;
+
+const personRow = (person: Person, csrf: string): Html => {
+  const setForm = personForm(csrf, person, html`<label>ID de Slack <input name="slack" pattern="[UW][A-Z0-9]+" placeholder="U01ABC23DEF" required></label> <button type="submit">Guardar vínculo</button>`);
+  const clearForm = person.matchSource === "manual"
+    ? personForm(csrf, person, html`<input type="hidden" name="slack" value=""><button type="submit">Quitar vínculo manual</button>`)
+    : "";
+  return html`<tr data-person>
+<td>${person.name}</td>
+<td>${person.email ?? html`<span class="muted">—</span>`}</td>
+<td>${SOURCES[person.matchSource]}</td>
+<td>${person.slackUserId ? html`<code>${person.slackUserId}</code>` : html`<span class="muted">—</span>`}</td>
+<td>${setForm}${clearForm}</td>
+</tr>`;
+};
+
+const peoplePage = (people: Person[], linearDown: boolean, flash: string | null, csrf: string): Html => {
+  const warning = linearDown ? html`<p class="flash-error" role="alert">No se pudo consultar Linear. Se muestran las personas guardadas.</p>` : "";
+  const sync = html`<form method="post" action="/admin/people/sync"><input type="hidden" name="csrf" value="${csrf}"><button type="submit">Volver a emparejar por correo</button></form>`;
+  const table = people.length
+    ? html`<table>
+<thead><tr><th scope="col">Persona</th><th scope="col">Correo</th><th scope="col">Estado</th><th scope="col">Slack</th><th scope="col">Vínculo</th></tr></thead>
+<tbody>${people.map((person) => personRow(person, csrf))}</tbody>
+</table>`
+    : html`<p>Aún no hay personas. Use «Volver a emparejar por correo» para cargarlas.</p>`;
+  return layout({ title: "Personas", current: "people", body: html`${flashNotice(flash)}${warning}${sync}${table}` });
+};
 
 const errorPage = (): Html =>
   layout({ title: "Error", current: "status", body: html`<p>No se pudo cargar la página. Inténtelo de nuevo más tarde.</p>` });
@@ -170,16 +216,71 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
     }));
   };
 
+  const people = async (res: ServerResponse, status: string | null): Promise<void> => {
+    let linearDown = false;
+    try {
+      if (!linear?.listUsers) throw new Error("Linear unavailable");
+      // Known Linear users appear right away as unlinked so an override can be set before the first sync.
+      for (const user of await linear.listUsers()) {
+        if (user.active && !store.getPerson(user.id)) {
+          store.upsertPerson({ linearUserId: user.id, name: user.name, email: user.email?.trim() || null, slackUserId: null, matchSource: "unmatched" });
+        }
+      }
+    } catch (error) {
+      logUpstream("Linear user list", error);
+      linearDown = true;
+    }
+    page(res, 200, peoplePage(store.listPeople(), linearDown, status, csrfToken(csrfSecret)));
+  };
+
   const get = async (res: ServerResponse, path: string, search: URLSearchParams): Promise<void> => {
     const route = path.replace(/\/+$/, "") || "/";
     if (route === "/admin") return redirect(res, "/admin/status", SECURITY_HEADERS);
-    if (route === "/admin/status") return page(res, 200, statusPage(store, timeZone));
+    if (route === "/admin/status") return page(res, 200, statusPage(store, timeZone, search.get("all") === "1"));
     if (route === "/admin/channels") return channels(res, search.get("status"));
-    if (route === "/admin/people") return page(res, 200, placeholder("Personas", "people"));
+    if (route === "/admin/people") return people(res, search.get("status"));
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
 
-  const done = (res: ServerResponse, status: string): void => redirect(res, `/admin/channels?status=${status}`, SECURITY_HEADERS);
+  const done = (res: ServerResponse, status: string, section = "channels"): void => redirect(res, `/admin/${section}?status=${status}`, SECURITY_HEADERS);
+
+  const lookupEmail = async (email: string): Promise<string | null> => {
+    try {
+      if (!slack?.lookupUserByEmail) throw new Error("Slack unavailable");
+      return await slack.lookupUserByEmail(email);
+    } catch (error) {
+      logUpstream("Slack user lookup", error);
+      throw error;
+    }
+  };
+
+  const peoplePost = async (res: ServerResponse, route: string, form: Record<string, string>): Promise<void> => {
+    const back = (status: string): void => done(res, status, "people");
+    if (route === "/admin/people/sync") {
+      let users;
+      try {
+        if (!linear?.listUsers) throw new Error("Linear unavailable");
+        users = await linear.listUsers();
+      } catch (error) {
+        logUpstream("Linear user list", error);
+        return back("linear-error");
+      }
+      return back((await syncPeople(users, lookupEmail, store)).failed ? "synced-partial" : "synced");
+    }
+    const user = form.user ?? "";
+    const slackId = form.slack ?? "";
+    // An empty Slack id clears the override and re-runs the email match.
+    if (slackId.trim() === "") {
+      let result;
+      try {
+        result = await clearOverride(store, user, lookupEmail);
+      } catch {
+        return back("slack-error");
+      }
+      return back({ auto: "override-cleared", unmatched: "override-cleared", "not-found": "person-not-found", "not-manual": "invalid-slack-id" }[result]);
+    }
+    return back({ set: "override-set", invalid: "invalid-slack-id", "not-found": "person-not-found" }[setOverride(store, user, slackId)]);
+  };
 
   const channelsPost = async (res: ServerResponse, route: string, form: Record<string, string>): Promise<void> => {
     if (route === "/admin/channels/refresh") {
@@ -212,7 +313,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
     if (!verifyCsrf(form.csrf, csrfSecret)) return send(res, 403, { error: "forbidden" }, SECURITY_HEADERS);
     const route = path.replace(/\/+$/, "");
     if (["/admin/channels/refresh", "/admin/channels/link", "/admin/channels/unlink"].includes(route)) return channelsPost(res, route, form);
-    // People routes arrive in a later slice.
+    if (route === "/admin/people/sync" || route === "/admin/people/override") return peoplePost(res, route, form);
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
   };
 

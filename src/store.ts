@@ -49,7 +49,7 @@ export type Store = {
   hasNotifiedCreate: (issueId: string, assigneeId: string) => boolean;
   // Relabels in-flight rows older than the window as interrupted (the process died mid-delivery). Returns rows changed.
   sweepInterrupted: (olderThanMs: number) => number;
-  recentEvents: (limit?: number) => LoggedEvent[];
+  recentEvents: (limit?: number, options?: { hideUnclassified?: boolean }) => LoggedEvent[];
 };
 
 type Row = Record<string, string | number | null>;
@@ -164,7 +164,10 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
          LIMIT 1`,
         issueId, assigneeId,
       ).length > 0,
-    recentEvents: (limit = DEFAULT_RECENT_EVENTS) =>
-      all("SELECT * FROM event_log ORDER BY received_at DESC, id DESC LIMIT ?", limit).map(toEvent),
+    recentEvents: (limit = DEFAULT_RECENT_EVENTS, { hideUnclassified = false } = {}) =>
+      all(
+        `SELECT * FROM event_log ${hideUnclassified ? "WHERE kind <> 'unclassified'" : ""} ORDER BY received_at DESC, id DESC LIMIT ?`,
+        limit,
+      ).map(toEvent),
   };
 };

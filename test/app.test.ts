@@ -5,6 +5,7 @@ import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createApp } from "../src/app.ts";
 import { openDb } from "../src/db.ts";
+import { syncPeople } from "../src/people.ts";
 import { createStore } from "../src/store.ts";
 import type { Store } from "../src/store.ts";
 
@@ -339,5 +340,20 @@ test("a created notice still in flight suppresses the assigned notice that follo
     await deliver(h, assignedBody({ id: "u-beto", name: "Beto" }), "d-2");
     assert.deepEqual(h.sent, []);
     assert.equal(h.store.recentEvents()[0]?.reason, "assigned-at-create");
+  });
+});
+
+test("mentions start working for people matched by syncPeople, and unmatched people stay plain text", async () => {
+  await withApp(async (h) => {
+    await syncPeople(
+      [{ id: "u-beto", name: "Beto", email: "BETO@kamailab.com", active: true }, { id: "u-carla", name: "Carla", email: "carla@x.com", active: true }],
+      async (email) => (email === "beto@kamailab.com" ? "UBETO" : null),
+      h.store,
+    );
+    await deliver(h, createdBody({ id: "u-beto" }), "d-1");
+    await deliver(h, createdBody({ id: "u-carla", name: "Carla" }), "d-2");
+    assert.match(h.sent[0] ?? "", /<@UBETO>/);
+    assert.match(h.sent[1] ?? "", /Carla/);
+    assert.doesNotMatch(h.sent[1] ?? "", /<@/);
   });
 });

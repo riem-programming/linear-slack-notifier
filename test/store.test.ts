@@ -180,3 +180,11 @@ test("sweepInterrupted relabels only old in-flight rows", () => {
   assert.deepEqual(reasons, { old: "interrupted", done: "post-failed", fresh: "in-flight" });
   assert.equal(store.sweepInterrupted(5 * 60_000), 0);
 });
+
+test("recentEvents can exclude unclassified rows before applying the limit", () => {
+  const { store } = setup();
+  store.insertEvent(entry("d1", { issueIdentifier: "KAM-1" }));
+  for (let i = 2; i <= 4; i += 1) store.insertEvent(entry(`d${i}`, { kind: "unclassified", outcome: "skipped", reason: "x", targets: [] }));
+  assert.equal(store.recentEvents(2).length, 2);
+  assert.deepEqual(store.recentEvents(2, { hideUnclassified: true }).map((e) => e.issueIdentifier), ["KAM-1"]);
+});

@@ -14,9 +14,9 @@ import type { EventEntry, Store } from "./store.ts";
 type AppOptions = {
   secret: string;
   store: Store;
-  slack: Pick<SlackApi, "postMessage"> & Partial<Pick<SlackApi, "listChannels">>;
-  // Read-only Linear client for the admin Channels screen.
-  linear?: Pick<LinearApi, "listProjects">;
+  slack: Pick<SlackApi, "postMessage"> & Partial<Pick<SlackApi, "listChannels" | "lookupUserByEmail">>;
+  // Read-only Linear client for the admin Channels and People screens.
+  linear?: Partial<Pick<LinearApi, "listProjects" | "listUsers">>;
   // Unset or empty keeps the admin UI disabled (deny, never open).
   adminPassword?: string | undefined;
   timeZone?: string;
