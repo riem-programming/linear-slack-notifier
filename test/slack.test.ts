@@ -118,3 +118,38 @@ test("lookupUserByEmail retries once on a short 429", async () => {
   assert.equal(await createSlackApi({ token: "t", fetch, sleep: async () => {} }).lookupUserByEmail("a@b.c"), "U9");
   assert.equal(calls.length, 2);
 });
+
+test("postEphemeral sends chat.postEphemeral with unfurls off", async () => {
+  const { fetch, calls } = fakeFetch(json({ ok: true }));
+  await createSlackApi({ token: "t", fetch }).postEphemeral("C1", "U1", "ayuda");
+  assert.equal(calls[0]?.url, "https://slack.com/api/chat.postEphemeral");
+  assert.deepEqual(JSON.parse(calls[0]?.init.body as string), { channel: "C1", user: "U1", text: "ayuda", unfurl_links: false, unfurl_media: false });
+});
+
+test("postMessage can reply in a thread", async () => {
+  const { fetch, calls } = fakeFetch(json({ ok: true }));
+  await createSlackApi({ token: "t", fetch }).postMessage("C1", "hola", "1700000000.000100");
+  assert.equal(JSON.parse(calls[0]?.init.body as string).thread_ts, "1700000000.000100");
+});
+
+test("respond posts to a hooks.slack.com response_url without the bot token", async () => {
+  const { fetch, calls } = fakeFetch(new Response("ok"));
+  await createSlackApi({ token: "xoxb-secret", fetch }).respond("https://hooks.slack.com/commands/T1/2/abc", "hola", "ephemeral");
+  assert.equal(calls[0]?.url, "https://hooks.slack.com/commands/T1/2/abc");
+  assert.equal((calls[0]?.init.headers as Record<string, string>).authorization, undefined);
+  assert.deepEqual(JSON.parse(calls[0]?.init.body as string), { text: "hola", response_type: "ephemeral", unfurl_links: false, unfurl_media: false });
+});
+
+test("respond refuses any response_url that is not https://hooks.slack.com", async () => {
+  const { fetch, calls } = fakeFetch(new Response("ok"));
+  const api = createSlackApi({ token: "t", fetch });
+  for (const url of ["http://hooks.slack.com/x", "https://hooks.slack.com.evil.test/x", "https://evil.test/hooks.slack.com", "https://user@evil.test/", "https://hooks.slack.com:8443/x", "not a url"]) {
+    await assert.rejects(api.respond(url, "x", "in_channel"), { message: "invalid response_url" });
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("respond throws on a non-2xx answer", async () => {
+  const { fetch } = fakeFetch(new Response("no", { status: 404 }));
+  await assert.rejects(createSlackApi({ token: "t", fetch }).respond("https://hooks.slack.com/x", "x", "in_channel"), { message: "response_url responded with status 404" });
+});
