@@ -5,7 +5,7 @@ import { BodyTooLargeError, parseForm, readBody, redirect, send, sendHtml } from
 import { html, layout } from "./html.ts";
 import type { Html } from "./html.ts";
 import type { LinearApi } from "./linear.ts";
-import { clearOverride, setOverride, syncPeople } from "./people.ts";
+import { clearOverride, deactivateMissing, setOverride, syncPeople } from "./people.ts";
 import type { SlackApi } from "./slack.ts";
 import type { Channel, LoggedEvent, MatchSource, Person, Project, Store } from "./store.ts";
 
@@ -223,7 +223,9 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
     try {
       if (!linear?.listUsers) throw new Error("Linear unavailable");
       // Known Linear users appear right away as unlinked so an override can be set before the first sync.
-      for (const user of await linear.listUsers()) {
+      const users = await linear.listUsers();
+      deactivateMissing(users, store);
+      for (const user of users) {
         if (user.active && !store.getPerson(user.id)) {
           store.upsertPerson({ linearUserId: user.id, name: user.name, email: user.email?.trim() || null, slackUserId: null, matchSource: "unmatched" });
         }
@@ -232,7 +234,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
       logUpstream("Linear user list", error);
       linearDown = true;
     }
-    page(res, 200, peoplePage(store.listPeople(), linearDown, status, csrfToken(csrfSecret)));
+    page(res, 200, peoplePage(store.listPeople().filter((person) => person.active !== false), linearDown, status, csrfToken(csrfSecret)));
   };
 
   const get = async (res: ServerResponse, path: string, search: URLSearchParams): Promise<void> => {

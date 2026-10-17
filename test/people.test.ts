@@ -17,7 +17,7 @@ test("syncPeople matches by email case-insensitively and stores source auto", as
   const { lookup, calls } = directory({ "luis@kamailab.com": "ULUIS" });
   const summary = await syncPeople([user("u1", "Luis", "Luis@KamaiLab.com ")], lookup, store);
   assert.deepEqual(calls, ["luis@kamailab.com"]);
-  assert.deepEqual(store.getPerson("u1"), { linearUserId: "u1", name: "Luis", email: "Luis@KamaiLab.com", slackUserId: "ULUIS", matchSource: "auto" });
+  assert.deepEqual(store.getPerson("u1"), { linearUserId: "u1", name: "Luis", email: "Luis@KamaiLab.com", slackUserId: "ULUIS", matchSource: "auto", active: true });
   assert.deepEqual(summary, { auto: 1, unmatched: 0, manual: 0, failed: 0 });
 });
 
@@ -39,7 +39,7 @@ test("a manual row is never overwritten by a re-sync, only name and email refres
   const { lookup, calls } = directory({ "luis@kamailab.com": "UAUTO" });
   const summary = await syncPeople([user("u1", "Luis", "luis@kamailab.com")], lookup, store);
   assert.deepEqual(calls, []);
-  assert.deepEqual(store.getPerson("u1"), { linearUserId: "u1", name: "Luis", email: "luis@kamailab.com", slackUserId: "UMANUAL", matchSource: "manual" });
+  assert.deepEqual(store.getPerson("u1"), { linearUserId: "u1", name: "Luis", email: "luis@kamailab.com", slackUserId: "UMANUAL", matchSource: "manual", active: true });
   assert.equal(summary.manual, 1);
 });
 
@@ -131,4 +131,24 @@ test("setOverride rejects lowercase and whitespace-only ids", () => {
   assert.equal(setOverride(store, "u1", "u123abc"), "invalid");
   assert.equal(setOverride(store, "u1", "   "), "invalid");
   assert.equal(store.getPerson("u1")?.matchSource, "unmatched");
+});
+
+test("syncPeople deactivates stored people who are inactive or gone from Linear, manual ones too", async () => {
+  const store = setup();
+  store.upsertPerson({ linearUserId: "gone", name: "Gone", email: "g@x.com", slackUserId: "UGONE", matchSource: "auto" });
+  store.upsertPerson({ linearUserId: "manual", name: "Manual", email: "m@x.com", slackUserId: "UMAN", matchSource: "manual" });
+  store.upsertPerson({ linearUserId: "off", name: "Off", email: "o@x.com", slackUserId: "UOFF", matchSource: "auto" });
+  store.upsertPerson({ linearUserId: "stay", name: "Stay", email: "s@x.com", slackUserId: "USTAY", matchSource: "auto" });
+  await syncPeople([user("off", "Off", "o@x.com", false), user("stay", "Stay", "s@x.com")], directory({ "s@x.com": "USTAY" }).lookup, store);
+  for (const id of ["gone", "manual", "off"]) {
+    assert.deepEqual([store.getPerson(id)?.slackUserId, store.getPerson(id)?.matchSource, store.getPerson(id)?.active], [null, "unmatched", false], id);
+  }
+  assert.deepEqual([store.getPerson("stay")?.slackUserId, store.getPerson("stay")?.active], ["USTAY", true]);
+});
+
+test("a deactivated user who comes back is active again and matched by email", async () => {
+  const store = setup();
+  store.upsertPerson({ linearUserId: "u1", name: "Luis", email: "l@x.com", slackUserId: null, matchSource: "unmatched", active: false });
+  await syncPeople([user("u1", "Luis", "l@x.com")], directory({ "l@x.com": "ULUIS" }).lookup, store);
+  assert.deepEqual([store.getPerson("u1")?.slackUserId, store.getPerson("u1")?.active], ["ULUIS", true]);
 });

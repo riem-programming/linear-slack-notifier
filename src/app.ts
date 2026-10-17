@@ -56,7 +56,8 @@ export const createApp = ({
 
   const lookup: PersonLookup = (id) => {
     const person = store.getPerson(id);
-    return person ? { slackUserId: person.slackUserId, name: person.name } : null;
+    // A deactivated person keeps a plain name but is never mentioned.
+    return person ? { slackUserId: person.active === false ? null : person.slackUserId, name: person.name } : null;
   };
 
   const decide = (result: IssueNotice | Ignored): Promise<RouteResult> | RouteResult => {

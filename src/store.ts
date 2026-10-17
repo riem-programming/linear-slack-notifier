@@ -11,6 +11,8 @@ export type Person = {
   email: string | null;
   slackUserId: string | null;
   matchSource: MatchSource;
+  // Absent means active.
+  active?: boolean;
 };
 export type EventOutcome = "notified" | "skipped" | "failed";
 export type EventTarget = { channel: string; outcome: EventOutcome; error?: string };
@@ -62,6 +64,7 @@ const toPerson = (row: Row): Person => ({
   email: row.email as string | null,
   slackUserId: row.slack_user_id as string | null,
   matchSource: row.match_source as MatchSource,
+  active: row.active !== 0,
 });
 const toEvent = (row: Row): LoggedEvent => ({
   id: row.id as number,
@@ -132,10 +135,11 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
       ).map(toProject),
     upsertPerson: (person) => {
       db.prepare(
-        `INSERT INTO people (linear_user_id, name, email, slack_user_id, match_source, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO people (linear_user_id, name, email, slack_user_id, match_source, active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(linear_user_id) DO UPDATE SET name = excluded.name, email = excluded.email,
-           slack_user_id = excluded.slack_user_id, match_source = excluded.match_source, updated_at = excluded.updated_at`,
-      ).run(person.linearUserId, person.name, person.email, person.slackUserId, person.matchSource, stamp());
+           slack_user_id = excluded.slack_user_id, match_source = excluded.match_source, active = excluded.active,
+           updated_at = excluded.updated_at`,
+      ).run(person.linearUserId, person.name, person.email, person.slackUserId, person.matchSource, person.active === false ? 0 : 1, stamp());
     },
     getPerson: (linearUserId) => {
       const [row] = all("SELECT * FROM people WHERE linear_user_id = ?", linearUserId);

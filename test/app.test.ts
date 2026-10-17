@@ -357,3 +357,11 @@ test("mentions start working for people matched by syncPeople, and unmatched peo
     assert.doesNotMatch(h.sent[1] ?? "", /<@/);
   });
 });
+
+test("a deactivated person is never mentioned, even with a stored Slack id", async () => {
+  await withApp(async (h) => {
+    h.store.upsertPerson({ linearUserId: "u-beto", name: "Beto", email: null, slackUserId: "UBETO", matchSource: "manual", active: false });
+    await deliver(h, createdBody({ id: "u-beto", name: "Beto" }), "d-1");
+    assert.doesNotMatch(h.sent[0] ?? "", /<@UBETO>/);
+  });
+});

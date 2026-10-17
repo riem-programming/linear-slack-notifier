@@ -3,7 +3,7 @@ import type { MatchSource, Store } from "./store.ts";
 
 // Resolves an email to a Slack member id, or null when Slack has no such user. Throws on upstream failures.
 export type EmailLookup = (email: string) => Promise<string | null>;
-type PeopleStore = Pick<Store, "getPerson" | "upsertPerson">;
+type PeopleStore = Pick<Store, "getPerson" | "upsertPerson" | "listPeople">;
 
 export type SyncSummary = { auto: number; unmatched: number; manual: number; failed: number; stopped?: true };
 
@@ -16,22 +16,34 @@ const match = async (email: string | null, lookup: EmailLookup): Promise<{ slack
   return slackUserId ? { slackUserId, matchSource: "auto" } : { slackUserId: null, matchSource: "unmatched" };
 };
 
+// Stored people who are inactive or missing from a successful Linear read lose their Slack link (manual ones too)
+// and are flagged inactive, so they are never mentioned or listed.
+export const deactivateMissing = (users: LinearUser[], store: PeopleStore): void => {
+  const activeIds = new Set(users.filter((user) => user.active).map((user) => user.id));
+  for (const person of store.listPeople()) {
+    if (person.active !== false && !activeIds.has(person.linearUserId)) {
+      store.upsertPerson({ ...person, slackUserId: null, matchSource: "unmatched", active: false });
+    }
+  }
+};
+
 // Matches active Linear users to Slack by email. Manual rows keep their Slack id (only name and email refresh);
 // a failed lookup leaves the stored row untouched.
 export const syncPeople = async (users: LinearUser[], lookup: EmailLookup, store: PeopleStore): Promise<SyncSummary> => {
   const summary: SyncSummary = { auto: 0, unmatched: 0, manual: 0, failed: 0 };
+  deactivateMissing(users, store);
   for (const { id, name, active, email: rawEmail } of users) {
     if (!active) continue;
     const email = rawEmail?.trim() || null;
     const existing = store.getPerson(id);
     if (existing?.matchSource === "manual") {
-      store.upsertPerson({ ...existing, name, email });
+      store.upsertPerson({ ...existing, name, email, active: true });
       summary.manual += 1;
       continue;
     }
     try {
       const result = await match(email, lookup);
-      store.upsertPerson({ linearUserId: id, name, email, ...result });
+      store.upsertPerson({ linearUserId: id, name, email, active: true, ...result });
       summary[result.matchSource === "auto" ? "auto" : "unmatched"] += 1;
     } catch (error) {
       summary.failed += 1;

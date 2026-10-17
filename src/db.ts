@@ -35,6 +35,10 @@ export const migrations: readonly string[] = [
   ALTER TABLE event_log ADD COLUMN assignee_id TEXT;
   CREATE INDEX event_log_issue ON event_log(issue_id, kind);
   `,
+  // Deactivated or removed Linear users stay in the table but are never mentioned or listed.
+  `
+  ALTER TABLE people ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+  `,
 ];
 
 const userVersion = (db: DatabaseSync): number => {

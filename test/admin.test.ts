@@ -407,6 +407,8 @@ const LINEAR_USERS = [
   { id: "u1", name: "Luis", email: "Luis@kamailab.com", active: true },
   { id: "u9", name: "Baja", email: "baja@kamailab.com", active: false },
 ];
+// Linear still reports the seeded people as active, so the page does not deactivate them.
+const SEEDED_USERS = ["u1", "u2", "u3"].map((id) => ({ id, name: id, email: null, active: true }));
 
 test("people page lists users with auto, manual and unlinked states and the forms", () =>
   withApp(async ({ base, store }) => {
@@ -419,7 +421,7 @@ test("people page lists users with auto, manual and unlinked states and the form
     assert.equal((text.match(/action="\/admin\/people\/override"/g) ?? []).length, 4);
     assert.match(text, /name="csrf" value="[0-9a-f]{64}"/);
     assert.match(text, /pattern="\[UW\]\[A-Z0-9\]\+"/);
-  }));
+  }, { users: async () => SEEDED_USERS }));
 
 test("people page pulls active Linear users in as unlinked", () =>
   withApp(async ({ base, store }) => {
@@ -427,7 +429,7 @@ test("people page pulls active Linear users in as unlinked", () =>
     assert.match(text, /Luis/);
     assert.doesNotMatch(text, /Baja/);
     assert.match(rowOf(text, "Luis"), /Sin vincular/);
-    assert.deepEqual(store.getPerson("u1"), { linearUserId: "u1", name: "Luis", email: "Luis@kamailab.com", slackUserId: null, matchSource: "unmatched" });
+    assert.deepEqual(store.getPerson("u1"), { linearUserId: "u1", name: "Luis", email: "Luis@kamailab.com", slackUserId: null, matchSource: "unmatched", active: true });
   }, { users: async () => LINEAR_USERS }));
 
 test("people page shows an empty state when nobody is known yet", () =>
@@ -524,7 +526,7 @@ test("people page escapes hostile names, emails and ids", () =>
     const text = await (await fetch(`${base}/admin/people?status=<script>alert(2)</script>`, { headers: auth() })).text();
     assert.doesNotMatch(text, /<script>alert|<i>x|<img src/);
     assert.match(text, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
-  }));
+  }, { users: async () => SEEDED_USERS }));
 
 test("status hides unclassified events by default and the toggle shows or hides them again", () =>
   withApp(async ({ base, store }) => {
@@ -552,3 +554,24 @@ test("status with only unclassified events explains they are hidden instead of c
     assert.match(text, /Mostrar todos los eventos/);
     assert.equal((text.match(/<tr data-event/g) ?? []).length, 0);
   }));
+
+test("people page hides deactivated people and a successful Linear read deactivates the ones that are gone", () =>
+  withApp(async ({ base, store }) => {
+    store.upsertPerson({ linearUserId: "gone", name: "Fulano Baja", email: null, slackUserId: "UGONE", matchSource: "manual" });
+    store.upsertPerson({ linearUserId: "old", name: "Mengano Inactivo", email: null, slackUserId: null, matchSource: "unmatched", active: false });
+    const text = await (await fetch(`${base}/admin/people`, { headers: auth() })).text();
+    assert.doesNotMatch(text, /Fulano Baja|Mengano Inactivo|UGONE/);
+    assert.match(text, /Luis/);
+    assert.deepEqual([store.getPerson("gone")?.slackUserId, store.getPerson("gone")?.active], [null, false]);
+  }, { users: async () => LINEAR_USERS }));
+
+test("a whitespace-only Slack id is a clear request and a lowercase id is rejected", () =>
+  withApp(async (h) => {
+    seedPeople(h.store);
+    const lower = await submit(h, "/admin/people/override", { user: "u3", slack: "ubeto1" });
+    assert.equal(lower.headers.get("location"), "/admin/people?status=invalid-slack-id");
+    assert.equal(h.store.getPerson("u3")?.matchSource, "unmatched");
+    const blank = await submit(h, "/admin/people/override", { user: "u2", slack: "   " });
+    assert.equal(blank.headers.get("location"), "/admin/people?status=override-cleared");
+    assert.deepEqual([h.store.getPerson("u2")?.slackUserId, h.store.getPerson("u2")?.matchSource], ["UANA2", "auto"]);
+  }, { lookup: async () => "UANA2" }));
