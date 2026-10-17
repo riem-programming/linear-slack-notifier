@@ -365,3 +365,140 @@ test("a deactivated person is never mentioned, even with a stored Slack id", asy
     assert.doesNotMatch(h.sent[0] ?? "", /<@UBETO>/);
   });
 });
+
+const slackSecret = "slack-secret";
+type BotCall = { kind: "command" | "mention"; input: unknown };
+
+const withSlackApp = async (
+  run: (h: { base: string; calls: BotCall[]; settle: () => Promise<void>; deferred: () => number }) => Promise<void>,
+  options: { botFails?: boolean; logs?: string[] } = {},
+): Promise<void> => {
+  const calls: BotCall[] = [];
+  const pending: (() => Promise<void>)[] = [];
+  const logs = options.logs ?? [];
+  const server = createApp({
+    secret, store: createStore(openDb(":memory:")), slack: { postMessage: async () => {} }, now: () => 1_700_000_000_000,
+    logger: { info: () => {}, warn: (line) => void logs.push(line), error: (line) => void logs.push(line) },
+    defer: (task) => void pending.push(task), slackSigningSecret: slackSecret,
+    bot: {
+      command: async (input) => {
+        calls.push({ kind: "command", input });
+        if (options.botFails) throw new Error("boom");
+      },
+      mention: async (input) => void calls.push({ kind: "mention", input }),
+    },
+  });
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  try {
+    await run({
+      base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, calls, deferred: () => pending.length,
+      settle: async () => {
+        for (let task = pending.shift(); task; task = pending.shift()) await task();
+      },
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+};
+
+const TS = "1700000000";
+const slackSign = (body: string, ts = TS): string => `v0=${createHmac("sha256", slackSecret).update(`v0:${ts}:${body}`).digest("hex")}`;
+const slackPost = (base: string, path: string, body: string, extra: Record<string, string> = {}, signed = true): Promise<Response> =>
+  fetch(`${base}${path}`, {
+    method: "POST",
+    headers: { "x-slack-request-timestamp": TS, ...(signed ? { "x-slack-signature": slackSign(body) } : {}), ...extra },
+    body,
+  });
+const mentionBody = (event: Record<string, unknown> = {}): string =>
+  JSON.stringify({ type: "event_callback", event: { type: "app_mention", channel: "C1", user: "U1", text: "<@UBOT> web", ts: "9.9", ...event } });
+const form = (fields: Record<string, string>): string => new URLSearchParams(fields).toString();
+
+test("slack routes reject missing, bad and stale signatures with 401 and run nothing", async () => {
+  await withSlackApp(async ({ base, calls, settle }) => {
+    for (const path of ["/slack/events", "/slack/commands"]) {
+      const body = path === "/slack/events" ? mentionBody() : form({ text: "web", channel_id: "C1", response_url: "https://hooks.slack.com/x" });
+      assert.equal((await slackPost(base, path, body, {}, false)).status, 401);
+      assert.equal((await slackPost(base, path, body, { "x-slack-signature": "v0=00" })).status, 401);
+      assert.equal((await slackPost(base, path, body, { "x-slack-request-timestamp": "1699999000", "x-slack-signature": slackSign(body, "1699999000") })).status, 401);
+    }
+    await settle();
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("url_verification echoes the challenge after signature verification", async () => {
+  await withSlackApp(async ({ base }) => {
+    const body = JSON.stringify({ type: "url_verification", challenge: "abc123" });
+    const response = await slackPost(base, "/slack/events", body);
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { challenge: string }).challenge, "abc123");
+    assert.equal((await slackPost(base, "/slack/events", body, {}, false)).status, 401);
+  });
+});
+
+test("an app_mention is acked before the background work and then handled", async () => {
+  await withSlackApp(async ({ base, calls, settle, deferred }) => {
+    assert.equal((await slackPost(base, "/slack/events", mentionBody({ thread_ts: "5.5" }))).status, 200);
+    assert.equal(calls.length, 0);
+    assert.equal(deferred(), 1);
+    await settle();
+    assert.deepEqual(calls, [{ kind: "mention", input: { text: "<@UBOT> web", channel: "C1", user: "U1", threadTs: "5.5" } }]);
+  });
+});
+
+test("retries, bot_id events and other event types are acked and ignored", async () => {
+  await withSlackApp(async ({ base, calls, settle }) => {
+    const retried = await slackPost(base, "/slack/events", mentionBody(), { "x-slack-retry-num": "1" });
+    assert.equal(retried.status, 200);
+    assert.equal((await slackPost(base, "/slack/events", mentionBody({ bot_id: "B1" }))).status, 200);
+    assert.equal((await slackPost(base, "/slack/events", mentionBody({ type: "message" }))).status, 200);
+    assert.equal((await slackPost(base, "/slack/events", mentionBody({ channel: 5 }))).status, 200);
+    await settle();
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("a slash command returns an empty 200 before the background work runs", async () => {
+  await withSlackApp(async ({ base, calls, settle, deferred }) => {
+    const body = form({ command: "/estado-dev", text: "web", channel_id: "C1", response_url: "https://hooks.slack.com/commands/x" });
+    const response = await slackPost(base, "/slack/commands", body);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "");
+    assert.equal(calls.length, 0);
+    assert.equal(deferred(), 1);
+    await settle();
+    assert.deepEqual(calls, [{ kind: "command", input: { text: "web", channelId: "C1", responseUrl: "https://hooks.slack.com/commands/x" } }]);
+  });
+});
+
+test("a slash command without response_url or channel_id is a 400", async () => {
+  await withSlackApp(async ({ base, calls, settle }) => {
+    assert.equal((await slackPost(base, "/slack/commands", form({ text: "web", channel_id: "C1" }))).status, 400);
+    await settle();
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("a failing bot never rejects the deferred task and logs no secret", async () => {
+  const logs: string[] = [];
+  await withSlackApp(async ({ base, settle }) => {
+    await slackPost(base, "/slack/commands", form({ text: "x", channel_id: "C1", response_url: "https://hooks.slack.com/commands/x" }));
+    await settle();
+  }, { botFails: true, logs });
+  assert.ok(logs.some((line) => line.includes("boom")));
+  assert.ok(!logs.some((line) => line.includes(slackSecret) || line.includes("hooks.slack.com")));
+});
+
+test("slack routes need neither admin credentials nor an admin password", async () => {
+  await withSlackApp(async ({ base }) => {
+    assert.equal((await slackPost(base, "/slack/events", JSON.stringify({ type: "url_verification", challenge: "c" }))).status, 200);
+  });
+});
+
+test("slack routes answer 404 when the bot is not configured", async () => {
+  await withApp(async ({ base }) => {
+    assert.equal((await fetch(`${base}/slack/events`, { method: "POST", body: "{}" })).status, 404);
+    assert.equal((await fetch(`${base}/slack/commands`, { method: "POST", body: "" })).status, 404);
+  });
+});

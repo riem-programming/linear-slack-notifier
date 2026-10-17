@@ -1,4 +1,5 @@
 import { createApp } from "./app.ts";
+import { createBot } from "./bot.ts";
 import { loadConfig } from "./config.ts";
 import type { Config } from "./config.ts";
 import { backup, openDb, pruneEventLog } from "./db.ts";
@@ -49,13 +50,17 @@ const start = (): void => {
   const store = createStore(db);
   // Rows still in flight from a previous run were cut short; label them so the Status screen is honest.
   store.sweepInterrupted(STALE_IN_FLIGHT_MS);
+  const slack = createSlackApi({ token: config.slackBotToken });
+  const linear = createLinearApi({ apiKey: config.linearApiKey });
   const server = createApp({
     secret: config.linearWebhookSecret,
     store,
     adminPassword: config.adminPassword,
     timeZone: config.statusTimeZone,
-    slack: createSlackApi({ token: config.slackBotToken }),
-    linear: createLinearApi({ apiKey: config.linearApiKey }),
+    slack,
+    linear,
+    slackSigningSecret: config.slackSigningSecret,
+    bot: createBot({ store, linear, slack, now: Date.now, timeZone: config.statusTimeZone, logger: console }),
   });
 
   server.listen(config.port, () => {
