@@ -111,11 +111,11 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(events): add accent-insensitive event search and issue link/mentions columns`
 - Linear ticket: "Eventos: búsqueda sin acentos y datos de enlace y menciones" - Búsqueda por identificador y título ignorando tildes, y guardado de URL del issue y nombres mencionados.
 - Files: `src/text.ts`, `src/status.ts`, `src/db.ts`, `src/store.ts`, `src/notify.ts`, `test/text.test.ts`, `test/db.test.ts`, `test/store.test.ts`, `test/notify.test.ts`.
-- [ ] 3a.1 RED: `foldText` (accents, case, whitespace); `status.ts` matching unchanged.
-- [ ] 3a.2 RED: migration 4 on a v3 DB with rows (new columns null), idempotent restart.
-- [ ] 3a.3 RED: `searchEvents`: finds KAM-42 as 120th newest; "gestion"/"GESTIÓN"; literal `%`/`_`; injection string safe; cap 50 newest first; blank falls back to `recentEvents`; `hideUnclassified` honored; legacy rows ok.
-- [ ] 3a.4 RED: `beginEvent` stores `issue_url` (null if absent); `finishEvent` stores `mentions` names (`[]` when none); `planMentions.mentioned`; no Slack ids stored.
-- [ ] 3a.5 GREEN: `text.ts`, `fold` registered in `openDb`, migration 4, store methods, `LoggedEvent.issueUrl/mentions`, `MentionPlan.mentioned`.
+- [x] 3a.1 RED: `foldText` (accents, case, whitespace); `status.ts` matching unchanged.
+- [x] 3a.2 RED: migration 4 on a v3 DB with rows (new columns null), idempotent restart.
+- [x] 3a.3 RED: `searchEvents`: finds KAM-42 as 120th newest; "gestion"/"GESTIÓN"; literal `%`/`_`; injection string safe; cap 50 newest first; blank falls back to `recentEvents`; `hideUnclassified` honored; legacy rows ok.
+- [x] 3a.4 RED: `beginEvent` stores `issue_url` (null if absent); `finishEvent` stores `mentions` names (`[]` when none); `planMentions.mentioned`; no Slack ids stored.
+- [x] 3a.5 GREEN: `text.ts`, `fold` registered in `openDb`, migration 4, store methods, `LoggedEvent.issueUrl/mentions`, `MentionPlan.mentioned`.
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: service starts and migrates (logs clean); old events still listed; trigger a Linear event and confirm it processes. New fields are visible only after 3b.
 - USER prerequisites: none. Migration is additive; take no action on revert.

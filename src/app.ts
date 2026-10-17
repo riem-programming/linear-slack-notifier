@@ -97,6 +97,7 @@ export const createApp = ({
       projectId: result.projectId,
       issueId: notice?.issueId ?? null,
       assigneeId: notice?.assignee?.id ?? null,
+      issueUrl: notice?.url ?? null,
       outcome: "failed",
       reason: "in-flight",
       targets: [],
@@ -115,7 +116,10 @@ export const createApp = ({
       outcome = { outcome: "failed", reason: "internal-error", targets: [] };
     }
     try {
-      store.finishEvent(id, outcome);
+      // Recomputed from the same pure plan the notice was rendered with; only recorded when a message actually went out.
+      const delivered = outcome.targets.some((target) => target.outcome === "notified");
+      const mentions = notice && delivered ? planMentions(notice, lookup).mentioned : [];
+      store.finishEvent(id, { ...outcome, mentions });
     } catch (error) {
       logger.error(`Failed to record event result: ${errorMessage(error)}`);
       return;

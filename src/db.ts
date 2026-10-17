@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { foldText } from "./text.ts";
 
 const BUSY_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_EVENT_ROWS = 5000;
@@ -38,6 +39,11 @@ export const migrations: readonly string[] = [
   // Deactivated or removed Linear users stay in the table but are never mentioned or listed.
   `
   ALTER TABLE people ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+  `,
+  // Issue link and mentioned display names (JSON array, never Slack ids). Null on rows written before this migration.
+  `
+  ALTER TABLE event_log ADD COLUMN issue_url TEXT;
+  ALTER TABLE event_log ADD COLUMN mentions TEXT;
   `,
 ];
 
@@ -77,6 +83,8 @@ export const openDb = (path: string): DatabaseSync => {
       throw new Error(`WAL journal mode is not available (got "${mode}")`);
     }
     db.exec("PRAGMA foreign_keys = ON");
+    // Accent- and case-insensitive matching for event search (see store.recentEvents).
+    db.function("fold", { deterministic: true }, (value) => foldText(typeof value === "string" ? value : ""));
     migrate(db);
     return db;
   } catch (error) {

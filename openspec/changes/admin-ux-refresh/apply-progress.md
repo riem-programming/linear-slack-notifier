@@ -91,3 +91,26 @@ Completed: 2b.1, 2b.2, 2b.3, 2b.4, 2b.5, 2b.6, 2b.7. Remaining: slices 3a throug
 - Login page uses `bare`; `next` is normalised with `safeNext` before it reaches the hidden field. A few CSS lines were added for the form.
 - Logout without a session answers 401 (JSON), as the gate runs before the POST pipeline.
 - `.env.example` was not touched or read (instruction); it may need a `SESSION_SECRET` entry.
+
+### Review follow-up on slice 2b (commit b3ec5ac)
+- `createAdmin` trims `SESSION_SECRET`, OPERATIONS notes were added, and the limiter tests assert exact boundaries.
+
+## Batch 5: Slice 3a (branch `feat/kamaiti-97-eventlog-search-data`, stacked on slice 2b, Linear KAMAITI-97)
+
+Completed: 3a.1, 3a.2, 3a.3, 3a.4, 3a.5. Remaining: slices 3b through 5b.
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 3a.1 | `test/text.test.ts` | Unit | 331+ existing | Written first (module missing) | passes | accents, case, tabs/newlines, empty; `status.ts` matching tests unchanged and green | `status.ts` `normalize` replaced by `foldText` |
+| 3a.2 | `test/db.test.ts` | Store (file DB) | existing | Written, failed (3 failures) | 17/17 | v3 file DB with a row, two reboots, columns null, `user_version` 4; `fold()` registered (`db.function` exists on node:sqlite in Node 24); `fold(NULL)` is empty; `migrate` still rejects newer schemas (existing test) | None needed |
+| 3a.3 | `test/store.test.ts` | Store | existing | Written, failed (4 failures) | green | KAM-42 as 120th newest; "gestion"/"GESTIÓN"/partial; literal `%`, `_`, `\` plus `a_e` finds nothing; injection string safe; cap 50 newest first; blank falls back; `hideUnclassified` honored; null identifier/title rows; 500-char query | Test fixes only |
+| 3a.4 | `test/store.test.ts`, `test/notify.test.ts`, `test/app.test.ts` | Store, unit, app | existing | Written, failed (7 failures) | 348/348 | url null when absent; mentions `[]` when none; legacy rows null; actor, unmatched and no-assignee excluded; stored name beats payload name; no Slack id in the logged row; nothing recorded when nothing delivered; unclassified has no url | None needed |
+| 3a.5 | n/a | | | | `pnpm test` 348/348, `pnpm typecheck` clean | | |
+
+### Notes and deviations
+- Search is exposed as `recentEvents(limit, { hideUnclassified, q })` (extends the existing store method) instead of a separate `searchEvents`; a blank `q` is the plain recent list. `q` is cut to 100 characters in the store.
+- `fold` is a SQL function registered in `openDb` (design U9); no normalized column was needed.
+- `finishEvent` always writes `mentions` (`[]` when none). The app records mentions only when at least one target was notified; skipped or failed deliveries record `[]`.
+- Mention names use the stored person name first, then the payload name.
+- Migration 4 is additive and nullable; no UI change (that is 3b).

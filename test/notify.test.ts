@@ -136,3 +136,17 @@ test("routeNotice reports failed with per-target errors when one channel fails a
     { channel: "C2", outcome: "notified" },
   ]);
 });
+
+test("mentioned lists display names of the people rendered as mentions, never Slack ids", () => {
+  assert.deepEqual(planMentions(notice("created"), lookup).mentioned, ["Luis Pérez"]);
+  const completed = notice("completed", { actor: { id: "u-x", name: "T" }, creator: ana, assignee: luis });
+  assert.deepEqual(planMentions(completed, lookup).mentioned, ["Ana Gómez", "Luis Pérez"]);
+  const stored: PersonLookup = (id) => (id === "u-luis" ? { slackUserId: "ULUIS", name: "Luis P." } : null);
+  assert.deepEqual(planMentions(notice("assigned"), stored).mentioned, ["Luis P."]);
+});
+
+test("mentioned excludes the actor, unmatched people and notices without mentions", () => {
+  assert.deepEqual(planMentions(notice("assigned", { assignee: ana }), lookup).mentioned, []);
+  assert.deepEqual(planMentions(notice("created", { assignee: { id: "u-z", name: "Zoe" } }), lookup).mentioned, []);
+  assert.deepEqual(planMentions(notice("created", { assignee: null }), lookup).mentioned, []);
+});

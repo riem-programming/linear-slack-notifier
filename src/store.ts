@@ -1,6 +1,27 @@
 import type { DatabaseSync } from "node:sqlite";
+import { foldText } from "./text.ts";
 
 const DEFAULT_RECENT_EVENTS = 50;
+const MAX_QUERY_CHARS = 100;
+const MAX_URL_CHARS = 2048;
+
+// Only Linear issue links are persisted, so a hostile payload cannot plant a javascript: or foreign link.
+const safeIssueUrl = (value: string | null | undefined): string | null => {
+  if (!value || value.length > MAX_URL_CHARS) return null;
+  try {
+    const { protocol, hostname } = new URL(value);
+    return protocol === "https:" && (hostname === "linear.app" || hostname.endsWith(".linear.app")) ? value : null;
+  } catch {
+    return null;
+  }
+};
+const parseJson = (value: unknown): unknown => {
+  try {
+    return typeof value === "string" ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+};
 
 export type Channel = { id: string; name: string; isMember: boolean };
 export type Project = { id: string; name: string };
@@ -24,12 +45,15 @@ export type EventEntry = {
   projectId: string | null;
   issueId?: string | null;
   assigneeId?: string | null;
+  issueUrl?: string | null;
   outcome: EventOutcome;
   reason: string | null;
   targets: EventTarget[];
 };
-export type EventResult = { outcome: EventOutcome; reason: string | null; targets: EventTarget[] };
-export type LoggedEvent = EventEntry & { id: number; receivedAt: string };
+// `mentions` holds display names only, never Slack ids. Omitted means no one was mentioned.
+export type EventResult = { outcome: EventOutcome; reason: string | null; targets: EventTarget[]; mentions?: string[] };
+// `mentions` is null on rows written before migration 4.
+export type LoggedEvent = EventEntry & { id: number; receivedAt: string; issueUrl: string | null; mentions: string[] | null };
 
 export type Store = {
   upsertChannel: (channel: Channel) => void;
@@ -51,7 +75,7 @@ export type Store = {
   hasNotifiedCreate: (issueId: string, assigneeId: string) => boolean;
   // Relabels in-flight rows older than the window as interrupted (the process died mid-delivery). Returns rows changed.
   sweepInterrupted: (olderThanMs: number) => number;
-  recentEvents: (limit?: number, options?: { hideUnclassified?: boolean }) => LoggedEvent[];
+  recentEvents: (limit?: number, options?: { hideUnclassified?: boolean; q?: string }) => LoggedEvent[];
 };
 
 type Row = Record<string, string | number | null>;
@@ -76,9 +100,11 @@ const toEvent = (row: Row): LoggedEvent => ({
   projectId: row.project_id as string | null,
   issueId: row.issue_id as string | null,
   assigneeId: row.assignee_id as string | null,
+  issueUrl: row.issue_url as string | null,
+  mentions: ((parsed) => (Array.isArray(parsed) && parsed.every((m) => typeof m === "string") ? (parsed as string[]) : null))(parseJson(row.mentions)),
   outcome: row.outcome as EventOutcome,
   reason: row.reason as string | null,
-  targets: row.targets ? (JSON.parse(row.targets as string) as EventTarget[]) : [],
+  targets: ((parsed) => (Array.isArray(parsed) ? (parsed as EventTarget[]) : []))(parseJson(row.targets)),
 });
 
 export const createStore = (db: DatabaseSync, now: () => number = Date.now): Store => {
@@ -88,12 +114,12 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
   const begin = (entry: EventEntry): number | null => {
     const result = db
       .prepare(
-        `INSERT INTO event_log (delivery_id, received_at, kind, issue_identifier, issue_title, project_id, issue_id, assignee_id, outcome, reason, targets)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING`,
+        `INSERT INTO event_log (delivery_id, received_at, kind, issue_identifier, issue_title, project_id, issue_id, assignee_id, issue_url, outcome, reason, targets)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(delivery_id) DO NOTHING`,
       )
       .run(
         entry.deliveryId, stamp(), entry.kind, entry.issueIdentifier, entry.issueTitle, entry.projectId,
-        entry.issueId ?? null, entry.assigneeId ?? null, entry.outcome, entry.reason, JSON.stringify(entry.targets),
+        entry.issueId ?? null, entry.assigneeId ?? null, safeIssueUrl(entry.issueUrl), entry.outcome, entry.reason, JSON.stringify(entry.targets),
       );
     return Number(result.changes) === 1 ? Number(result.lastInsertRowid) : null;
   };
@@ -149,8 +175,8 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
     insertEvent: (entry) => begin(entry) !== null,
     beginEvent: begin,
     finishEvent: (id, result) => {
-      db.prepare("UPDATE event_log SET outcome = ?, reason = ?, targets = ? WHERE id = ?").run(
-        result.outcome, result.reason, JSON.stringify(result.targets), id,
+      db.prepare("UPDATE event_log SET outcome = ?, reason = ?, targets = ?, mentions = ? WHERE id = ?").run(
+        result.outcome, result.reason, JSON.stringify(result.targets), JSON.stringify(result.mentions ?? []), id,
       );
     },
     sweepInterrupted: (olderThanMs) =>
@@ -168,10 +194,18 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
          LIMIT 1`,
         issueId, assigneeId,
       ).length > 0,
-    recentEvents: (limit = DEFAULT_RECENT_EVENTS, { hideUnclassified = false } = {}) =>
-      all(
-        `SELECT * FROM event_log ${hideUnclassified ? "WHERE kind <> 'unclassified'" : ""} ORDER BY received_at DESC, id DESC LIMIT ?`,
-        limit,
-      ).map(toEvent),
+    // `q` matches identifier and title, ignoring accents and case, as a literal substring over all stored rows.
+    recentEvents: (limit = DEFAULT_RECENT_EVENTS, { hideUnclassified = false, q = "" } = {}) => {
+      const folded = foldText(q.slice(0, MAX_QUERY_CHARS));
+      const where = [
+        ...(hideUnclassified ? ["kind <> 'unclassified'"] : []),
+        ...(folded ? ["fold(coalesce(issue_identifier, '') || ' ' || coalesce(issue_title, '')) LIKE ? ESCAPE '\\'"] : []),
+      ];
+      const params = folded ? [`%${folded.replace(/[\\%_]/g, "\\$&")}%`, limit] : [limit];
+      return all(
+        `SELECT * FROM event_log ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY received_at DESC, id DESC LIMIT ?`,
+        ...params,
+      ).map(toEvent);
+    },
   };
 };

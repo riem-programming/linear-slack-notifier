@@ -195,3 +195,99 @@ test("people are active by default and the flag round-trips", () => {
   store.upsertPerson({ linearUserId: "u2", name: "B", email: null, slackUserId: null, matchSource: "unmatched", active: false });
   assert.deepEqual(store.listPeople().map((p) => p.active), [true, false]);
 });
+
+const seed = (store: ReturnType<typeof setup>["store"], rows: Partial<EventEntry>[]): void =>
+  rows.forEach((row, i) => store.insertEvent(entry(`s${i}`, row)));
+
+test("recentEvents with q finds an old match beyond the newest 50, ignoring accents and case", () => {
+  const { store } = setup();
+  // The oldest of 120 rows, so it sits outside the newest 50.
+  seed(store, [
+    { issueIdentifier: "KAM-42", issueTitle: "Gestión de acceso" },
+    ...Array.from({ length: 119 }, (_, i) => ({ issueIdentifier: `OTH-${i}`, issueTitle: "Other" })),
+  ]);
+  assert.equal(store.recentEvents().length, 50);
+  assert.deepEqual(store.recentEvents(50, { q: "kam-42" }).map((e) => e.issueIdentifier), ["KAM-42"]);
+  assert.equal(store.recentEvents(50, { q: "gestion" }).length, 1);
+  assert.equal(store.recentEvents(50, { q: "GESTIÓN" }).length, 1);
+  assert.equal(store.recentEvents(50, { q: "  ges   " }).length, 1);
+});
+
+test("recentEvents q is literal for %, _ and backslash and safe against injection strings", () => {
+  const { store } = setup();
+  seed(store, [
+    { issueTitle: "100% done" }, { issueTitle: "snake_case" }, { issueTitle: "back\\slash" }, { issueTitle: "plain text" },
+  ]);
+  assert.deepEqual(store.recentEvents(50, { q: "%" }).map((e) => e.issueTitle), ["100% done"]);
+  assert.deepEqual(store.recentEvents(50, { q: "_" }).map((e) => e.issueTitle), ["snake_case"]);
+  assert.deepEqual(store.recentEvents(50, { q: "\\" }).map((e) => e.issueTitle), ["back\\slash"]);
+  assert.equal(store.recentEvents(50, { q: "a_e" }).length, 0);
+  assert.equal(store.recentEvents(50, { q: "'; DROP TABLE event_log; --" }).length, 0);
+  assert.equal(store.recentEvents().length, 4);
+});
+
+test("recentEvents q caps at 50 newest first, falls back when blank, and honors hideUnclassified", () => {
+  const { store } = setup();
+  seed(store, Array.from({ length: 60 }, (_, i) => ({ issueIdentifier: `KAM-${i}`, issueTitle: "match" })));
+  store.insertEvent(entry("u", { kind: "unclassified", issueIdentifier: null, issueTitle: "match unclassified" }));
+  const found = store.recentEvents(50, { q: "match" });
+  assert.equal(found.length, 50);
+  assert.equal(found[0]?.kind, "unclassified");
+  assert.equal(store.recentEvents(50, { q: "match", hideUnclassified: true })[0]?.issueIdentifier, "KAM-59");
+  assert.equal(store.recentEvents(50, { q: "match", hideUnclassified: true }).every((e) => e.kind !== "unclassified"), true);
+  assert.deepEqual(store.recentEvents(50, { q: "   " }).map((e) => e.id), store.recentEvents().map((e) => e.id));
+  assert.equal(store.recentEvents(50, { q: "x".repeat(500) }).length, 0);
+});
+
+test("recentEvents q works on legacy rows with null identifier and title", () => {
+  const { store } = setup();
+  seed(store, [{ issueIdentifier: null, issueTitle: null }, { issueTitle: "needle" }]);
+  assert.deepEqual(store.recentEvents(50, { q: "needle" }).map((e) => e.issueTitle), ["needle"]);
+});
+
+test("beginEvent stores issue_url (null when absent) and finishEvent stores mention names", () => {
+  const { store } = setup();
+  const withUrl = store.beginEvent(entry("u1", { issueUrl: "https://linear.app/k/KAM-1" }));
+  const without = store.beginEvent(entry("u2"));
+  assert.ok(withUrl !== null && without !== null);
+  store.finishEvent(withUrl, { outcome: "notified", reason: null, targets: [], mentions: ["Ana Gómez"] });
+  store.finishEvent(without, { outcome: "notified", reason: null, targets: [] });
+  const [second, first] = store.recentEvents();
+  assert.deepEqual([first?.issueUrl, first?.mentions], ["https://linear.app/k/KAM-1", ["Ana Gómez"]]);
+  assert.deepEqual([second?.issueUrl, second?.mentions], [null, []]);
+});
+
+test("rows written before migration 4 read back with null issueUrl and mentions", () => {
+  const { db, store } = setup();
+  db.prepare("INSERT INTO event_log (delivery_id, received_at, kind, outcome) VALUES ('old', '2026-01-01T00:00:00.000Z', 'created', 'notified')").run();
+  const [row] = store.recentEvents();
+  assert.deepEqual([row?.issueUrl, row?.mentions], [null, null]);
+});
+
+test("issue_url is stored only for https linear.app URLs within 2048 chars", () => {
+  const { store } = setup();
+  const stored = (url: string | null, i: number): string | null | undefined => {
+    store.insertEvent(entry(`url${i}`, { issueUrl: url }));
+    return store.recentEvents(1)[0]?.issueUrl;
+  };
+  const ok = "https://linear.app/kamai/issue/KAM-1/x";
+  assert.equal(stored(ok, 0), ok);
+  assert.equal(stored("https://sub.linear.app/a", 1), "https://sub.linear.app/a");
+  const bad = [
+    "javascript:alert(1)", "http://linear.app/a", "https://evil.com/a", "https://linear.app.evil.com/a",
+    "https://notlinear.app/a", "not a url", "", `https://linear.app/${"a".repeat(2048)}`,
+  ];
+  bad.forEach((url, i) => assert.equal(stored(url, i + 2), null, url.slice(0, 40)));
+});
+
+test("corrupted mentions and targets JSON reads back as null and empty instead of throwing", () => {
+  const { db, store } = setup();
+  const insert = db.prepare("INSERT INTO event_log (delivery_id, received_at, kind, outcome, targets, mentions) VALUES (?, ?, 'created', 'notified', ?, ?)");
+  insert.run("c1", "2026-01-01T00:00:00.000Z", "{oops", "[not json");
+  insert.run("c2", "2026-01-02T00:00:00.000Z", "[]", '{"a":1}');
+  insert.run("c3", "2026-01-03T00:00:00.000Z", "[]", '["ok", 5]');
+  insert.run("c4", "2026-01-04T00:00:00.000Z", "[]", '["ok","two"]');
+  const rows = store.recentEvents();
+  assert.deepEqual(rows.map((r) => r.mentions), [["ok", "two"], null, null, null]);
+  assert.deepEqual(rows[3]?.targets, []);
+});

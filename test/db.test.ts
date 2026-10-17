@@ -194,7 +194,7 @@ test("migration 2 adds issue and assignee ids to event_log and keeps existing ro
   const columns = (db.prepare("PRAGMA table_info(event_log)").all() as { name: string }[]).map((c) => c.name);
   assert.ok(columns.includes("issue_id") && columns.includes("assignee_id"));
   assert.deepEqual(deliveryIds(db), ["old"]);
-  assert.equal(migrations.length, 3);
+  assert.equal(migrations.length, 4);
   db.close();
 });
 
@@ -204,5 +204,33 @@ test("migration 3 adds an active flag to people, defaulting existing rows to act
   db.prepare("INSERT INTO people (linear_user_id, name, match_source, updated_at) VALUES ('u1', 'A', 'auto', 'x')").run();
   migrate(db);
   assert.equal((db.prepare("SELECT active FROM people").get() as { active: number }).active, 1);
+  db.close();
+});
+
+test("migration 4 adds nullable issue_url and mentions, keeps rows, and is idempotent on restart", () => {
+  const dir = mkdtempSync(join(tmpdir(), "notifier-m4-"));
+  const path = join(dir, "n.db");
+  const old = new DatabaseSync(path);
+  migrate(old, migrations.slice(0, 3));
+  insertEvent(old, "old", "2026-03-30T00:00:00.000Z");
+  old.close();
+  try {
+    for (let boot = 0; boot < 2; boot += 1) {
+      const db = openDb(path);
+      assert.equal(pragma(db, "user_version"), 4);
+      const row = db.prepare("SELECT issue_url, mentions FROM event_log").get() as { issue_url: string | null; mentions: string | null };
+      assert.deepEqual({ ...row }, { issue_url: null, mentions: null });
+      assert.deepEqual(deliveryIds(db), ["old"]);
+      db.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("openDb registers a deterministic fold() SQL function", () => {
+  const db = openDb(":memory:");
+  assert.equal((db.prepare("SELECT fold('GESTIÓN  Ñu') AS v").get() as { v: string }).v, "gestion nu");
+  assert.equal((db.prepare("SELECT fold(NULL) AS v").get() as { v: string }).v, "");
   db.close();
 });

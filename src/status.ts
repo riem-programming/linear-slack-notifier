@@ -1,5 +1,6 @@
 import type { ProjectSnapshot, SnapshotIssue } from "./linear.ts";
 import { escapeText, escapeUrl } from "./notify.ts";
+import { foldText } from "./text.ts";
 
 const TITLE_CAP = 120;
 const ZWSP = "​";
@@ -117,13 +118,11 @@ export const renderStatusMessage = (summaries: ProjectSummary[]): string =>
 
 export type ProjectMatch<T> = { kind: "match"; project: T } | { kind: "multiple"; candidates: T[] } | { kind: "none" };
 
-const normalize = (value: string): string => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
-
 // Design D4: exact, then unique prefix, then unique substring; several hits at the same step are ambiguous.
 export const matchProject = <T extends { name: string }>(input: string, projects: T[]): ProjectMatch<T> => {
-  const wanted = normalize(input);
+  const wanted = foldText(input);
   if (!wanted) return { kind: "none" };
-  const named = projects.map((project) => ({ project, name: normalize(project.name) }));
+  const named = projects.map((project) => ({ project, name: foldText(project.name) }));
   const steps = [(name: string) => name === wanted, (name: string) => name.startsWith(wanted), (name: string) => name.includes(wanted)];
   for (const test of steps) {
     const hits = named.filter(({ name }) => test(name)).map(({ project }) => project);
