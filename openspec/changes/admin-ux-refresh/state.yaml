@@ -6,8 +6,8 @@ phases:
   spec: done
   design: done
   tasks: done
-  apply: pending
-  verify: pending
+  apply: done
+  verify: done
   archive: pending
 artifacts:
   proposal: openspec/changes/admin-ux-refresh/proposal.md
@@ -30,7 +30,7 @@ delivery_resolved:
   slices: 10 (1a..5b), est ~3350 lines
 corrections:
   - "Estado segmented control = 'Avisos | Todos los eventos' with current ?all=1 semantics (Avisos hides unclassified, Todos includes). Both show at most 50 rows; no 500-row mode; counters cover rows shown (<=50). design.md U11 and specs admin-ui/event-log updated. Search narrows within all stored rows, still capped at 50, and (task-phase assumption) honors the selected segment's unclassified filter."
-next_recommended: [sdd-apply]
+next_recommended: [sdd-archive]
 resolved_in_design:
   - accent-insensitive search -> registered SQLite function fold() (no column, no backfill) (U9)
   - sheet fallback + admin.js scope -> same URL, X-Admin-Fragment header, <dialog>; admin.js = sheets, filters, js-only (U4, U5)
@@ -39,3 +39,4 @@ resolved_in_design:
 design_open_questions:
   - (resolved) Estado cap: both segments max 50 rows, see corrections
   - SameSite=Strict makes cross-site links land on login once (accepted)
+verify_result: PASS WITH WARNINGS (0 critical, 3 warning, 4 suggestion); manual staging pending; report verify-report.md
