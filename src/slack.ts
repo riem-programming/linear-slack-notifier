@@ -7,6 +7,8 @@ export type SlackApi = {
   postMessage: (channel: string, text: string) => Promise<void>;
   // Cursor-paginated; public and private non-archived channels the bot token can see.
   listChannels: () => Promise<SlackChannel[]>;
+  // Returns the member id for an email, or null when Slack has no such user (users_not_found).
+  lookupUserByEmail: (email: string) => Promise<string | null>;
 };
 
 export type SlackChannel = { id: string; name: string; isMember: boolean };
@@ -14,6 +16,7 @@ export type SlackChannel = { id: string; name: string; isMember: boolean };
 type SlackResult = {
   ok?: boolean;
   error?: string;
+  user?: { id?: string };
   channels?: { id: string; name: string; is_member?: boolean }[];
   response_metadata?: { next_cursor?: string };
 };
@@ -79,5 +82,14 @@ export const createSlackApi = ({
       await send("chat.postMessage", JSON.stringify({ channel, text }), "application/json; charset=utf-8", true);
     },
     listChannels,
+    lookupUserByEmail: async (email) => {
+      try {
+        const result = await send("users.lookupByEmail", new URLSearchParams({ email }).toString(), "application/x-www-form-urlencoded", true);
+        return result.user?.id || null;
+      } catch (error) {
+        if (error instanceof Error && error.message === "users_not_found") return null;
+        throw error;
+      }
+    },
   };
 };

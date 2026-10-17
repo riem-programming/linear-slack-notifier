@@ -4,10 +4,12 @@ const FAILURE_TTL_MS = 30_000;
 const MAX_PAGES = 20;
 
 export type LinearProject = { id: string; name: string };
+export type LinearUser = { id: string; name: string; email: string | null; active: boolean };
 
 export type LinearApi = {
-  // Cached for 5 minutes; failures are never cached.
+  // Both lists are cached for 5 minutes; failures are replayed briefly and never cached as data.
   listProjects: () => Promise<LinearProject[]>;
+  listUsers: () => Promise<LinearUser[]>;
 };
 
 type LinearApiOptions = {
@@ -20,60 +22,70 @@ type LinearApiOptions = {
 const PROJECTS_QUERY = `query Projects($after: String) {
   projects(first: 100, after: $after) { nodes { id name } pageInfo { hasNextPage endCursor } }
 }`;
+const USERS_QUERY = `query Users($after: String) {
+  users(first: 100, after: $after) { nodes { id name email active } pageInfo { hasNextPage endCursor } }
+}`;
 
-type ProjectsResponse = {
-  data?: { projects?: { nodes?: LinearProject[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } } };
-  errors?: unknown;
-};
+type Connection = { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean; endCursor?: string | null } };
+type GraphQlResponse = { data?: Record<string, Connection | undefined>; errors?: unknown };
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+const text = (value: unknown): string => (typeof value === "string" ? value : "");
+
+const toProject = (node: unknown): LinearProject | null =>
+  isRecord(node) && text(node.id) && text(node.name) ? { id: text(node.id), name: text(node.name) } : null;
+const toUser = (node: unknown): LinearUser | null =>
+  isRecord(node) && text(node.id) && text(node.name)
+    ? { id: text(node.id), name: text(node.name), email: text(node.email) || null, active: node.active === true }
+    : null;
 
 export const createLinearApi = ({ apiKey, fetch: fetchImpl = globalThis.fetch, now = Date.now, logger = console }: LinearApiOptions): LinearApi => {
-  let cache: { at: number; projects: LinearProject[] } | null = null;
-  let failure: { at: number; error: Error } | null = null;
-  let inFlight: Promise<LinearProject[]> | null = null;
-
   // Error messages are fixed strings: neither the key nor upstream bodies can leak through them.
-  const query = async (after: string | null): Promise<NonNullable<NonNullable<ProjectsResponse["data"]>["projects"]>> => {
+  const query = async (queryText: string, field: string, after: string | null): Promise<Connection> => {
     const response = await fetchImpl(LINEAR_API, {
       method: "POST",
       // Personal API keys are sent as-is, without the Bearer prefix.
       headers: { authorization: apiKey, "content-type": "application/json" },
-      body: JSON.stringify({ query: PROJECTS_QUERY, variables: { after } }),
+      body: JSON.stringify({ query: queryText, variables: { after } }),
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) throw new Error(`Linear responded with status ${response.status}`);
-    const result = (await response.json().catch(() => null)) as ProjectsResponse | null;
-    const projects = result?.data?.projects;
-    if (!projects || result?.errors) throw new Error("Linear returned an unexpected response");
-    return projects;
+    const result = (await response.json().catch(() => null)) as GraphQlResponse | null;
+    const connection = result?.data?.[field];
+    if (!connection || result?.errors) throw new Error("Linear returned an unexpected response");
+    return connection;
   };
 
-  const fetchAll = async (): Promise<LinearProject[]> => {
-    const projects: LinearProject[] = [];
+  const fetchAll = async <T>(queryText: string, field: string, convert: (node: unknown) => T | null): Promise<T[]> => {
+    const items: T[] = [];
     let after: string | null = null;
     for (let pageNumber = 0; pageNumber < MAX_PAGES; pageNumber += 1) {
-      const page = await query(after);
+      const page = await query(queryText, field, after);
       for (const node of page.nodes ?? []) {
-        if (typeof node?.id === "string" && node.id && typeof node.name === "string" && node.name) {
-          projects.push({ id: node.id, name: node.name });
-        }
+        const item = convert(node);
+        if (item) items.push(item);
       }
       after = page.pageInfo?.hasNextPage ? (page.pageInfo.endCursor ?? null) : null;
-      if (after === null) return projects;
+      if (after === null) return items;
     }
-    logger.warn(`Linear project list truncated at ${MAX_PAGES} pages`);
-    return projects;
+    logger.warn(`Linear ${field} list truncated at ${MAX_PAGES} pages`);
+    return items;
   };
 
-  return {
-    listProjects: () => {
-      if (cache && now() - cache.at <= CACHE_TTL_MS) return Promise.resolve(cache.projects);
+  // One cache, in-flight promise and failure replay per list.
+  const memo = <T>(load: () => Promise<T[]>): (() => Promise<T[]>) => {
+    let cache: { at: number; items: T[] } | null = null;
+    let failure: { at: number; error: Error } | null = null;
+    let inFlight: Promise<T[]> | null = null;
+    return () => {
+      if (cache && now() - cache.at <= CACHE_TTL_MS) return Promise.resolve(cache.items);
       // A recent failure is replayed so an outage does not make every request wait for the timeout.
       if (failure && now() - failure.at <= FAILURE_TTL_MS) return Promise.reject(failure.error);
-      inFlight ??= fetchAll()
-        .then((projects) => {
-          cache = { at: now(), projects };
+      inFlight ??= load()
+        .then((items) => {
+          cache = { at: now(), items };
           failure = null;
-          return projects;
+          return items;
         })
         .catch((error: unknown) => {
           failure = { at: now(), error: error instanceof Error ? error : new Error("Linear request failed") };
@@ -83,6 +95,11 @@ export const createLinearApi = ({ apiKey, fetch: fetchImpl = globalThis.fetch, n
           inFlight = null;
         });
       return inFlight;
-    },
+    };
+  };
+
+  return {
+    listProjects: memo(() => fetchAll(PROJECTS_QUERY, "projects", toProject)),
+    listUsers: memo(() => fetchAll(USERS_QUERY, "users", toUser)),
   };
 };

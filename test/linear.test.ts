@@ -102,3 +102,48 @@ test("requests carry an abort signal so a hung Linear cannot block the admin", a
   await createLinearApi({ apiKey: "k", fetch }).listProjects();
   assert.ok(calls[0]?.init.signal instanceof AbortSignal);
 });
+
+const usersPage = (nodes: unknown[], endCursor: string | null = null): Response =>
+  new Response(JSON.stringify({ data: { users: { nodes, pageInfo: { hasNextPage: endCursor !== null, endCursor } } } }));
+
+test("listUsers queries id, name, email and active and follows cursors", async () => {
+  const { fetch, calls } = fakeFetch(
+    usersPage([{ id: "u1", name: "Luis", email: "luis@kamailab.com", active: true }], "c1"),
+    usersPage([{ id: "u2", name: "Ana", email: null, active: false }]),
+  );
+  const users = await createLinearApi({ apiKey: "lin_api_secret", fetch }).listUsers();
+  assert.deepEqual(users, [
+    { id: "u1", name: "Luis", email: "luis@kamailab.com", active: true },
+    { id: "u2", name: "Ana", email: null, active: false },
+  ]);
+  const headers = calls[0]?.init.headers as Record<string, string>;
+  assert.equal(headers.authorization, "lin_api_secret");
+  const body = JSON.parse(calls[0]?.init.body as string) as { query: string };
+  assert.match(body.query, /users\(/);
+  assert.match(body.query, /id name email active/);
+  assert.equal(JSON.parse(calls[1]?.init.body as string).variables.after, "c1");
+});
+
+test("listUsers skips malformed nodes and treats a missing active flag as inactive", async () => {
+  const { fetch } = fakeFetch(usersPage([null, { id: "", name: "x" }, { id: "u1" }, { id: "u2", name: "Ok", email: 5 }]));
+  assert.deepEqual(await createLinearApi({ apiKey: "k", fetch }).listUsers(), [{ id: "u2", name: "Ok", email: null, active: false }]);
+});
+
+test("listUsers caches, shares in-flight requests and replays failures independently of projects", async () => {
+  let now = 0;
+  const { fetch, calls } = fakeFetch(new Response("", { status: 503 }), usersPage([{ id: "u1", name: "A", active: true }]));
+  const api = createLinearApi({ apiKey: "k", fetch, now: () => now });
+  await assert.rejects(api.listUsers(), /status 503/);
+  await assert.rejects(api.listUsers(), /status 503/);
+  assert.equal(calls.length, 1);
+  now += 31_000;
+  const [a, b] = await Promise.all([api.listUsers(), api.listUsers()]);
+  assert.deepEqual(a, b);
+  assert.equal(calls.length, 2);
+  now += 299_000;
+  await api.listUsers();
+  assert.equal(calls.length, 2);
+  now += 2_000;
+  await assert.rejects(api.listUsers(), /status 500/);
+  assert.equal(calls.length, 3);
+});

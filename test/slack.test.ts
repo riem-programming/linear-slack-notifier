@@ -95,3 +95,26 @@ test("listChannels throws the Slack error code on ok:false", async () => {
   const { fetch } = fakeFetch(json({ ok: false, error: "missing_scope" }));
   await assert.rejects(createSlackApi({ token: "xoxb-secret", fetch }).listChannels(), { message: "missing_scope" });
 });
+
+test("lookupUserByEmail posts the email with the bot token and returns the member id", async () => {
+  const { fetch, calls } = fakeFetch(json({ ok: true, user: { id: "U123" } }));
+  assert.equal(await createSlackApi({ token: "xoxb-t", fetch }).lookupUserByEmail("luis@kamailab.com"), "U123");
+  assert.equal(calls[0]?.url, "https://slack.com/api/users.lookupByEmail");
+  const headers = calls[0]?.init.headers as Record<string, string>;
+  assert.equal(headers.authorization, "Bearer xoxb-t");
+  assert.equal(new URLSearchParams(calls[0]?.init.body as string).get("email"), "luis@kamailab.com");
+});
+
+test("lookupUserByEmail returns null for users_not_found and throws other Slack errors", async () => {
+  const { fetch } = fakeFetch(json({ ok: false, error: "users_not_found" }), json({ ok: false, error: "missing_scope" }), json({ ok: true }));
+  const api = createSlackApi({ token: "xoxb-secret", fetch });
+  assert.equal(await api.lookupUserByEmail("a@b.c"), null);
+  await assert.rejects(api.lookupUserByEmail("a@b.c"), { message: "missing_scope" });
+  assert.equal(await api.lookupUserByEmail("a@b.c"), null);
+});
+
+test("lookupUserByEmail retries once on a short 429", async () => {
+  const { fetch, calls } = fakeFetch(json({ ok: false }, { status: 429, headers: { "retry-after": "1" } }), json({ ok: true, user: { id: "U9" } }));
+  assert.equal(await createSlackApi({ token: "t", fetch, sleep: async () => {} }).lookupUserByEmail("a@b.c"), "U9");
+  assert.equal(calls.length, 2);
+});
