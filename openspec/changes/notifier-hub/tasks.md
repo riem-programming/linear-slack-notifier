@@ -226,10 +226,10 @@ Checklist:
 - Linear ticket: "Comando /estado y menciones al bot" - Responder con el estado del proyecto desde Slack mediante el comando /estado y menciones al bot, con ayuda efimera en canales sin proyectos.
 
 Checklist:
-- [ ] 4b.1 RED `test/app.test.ts`: `/slack/events` rejects bad signature/stale ts; `url_verification` echoes challenge; events with `bot_id` or `X-Slack-Retry-Num` ignored; `/slack/commands` returns empty 200 before background work completes (collecting `defer`).
-- [ ] 4b.2 RED `test/bot.test.ts`: decision table: project arg -> `in_channel`; no arg + linked channel -> `in_channel` (one block per project, divider, name order); no arg + unlinked -> ephemeral help; unknown/ambiguous -> ephemeral candidates; Linear error -> ephemeral error; `@bot` strips `<@U...>` tokens, help via `postEphemeral`; accepts any command name.
-- [ ] 4b.3 RED `test/slack.test.ts`: `postEphemeral`, `respond(responseUrl, text, visibility)`.
-- [ ] 4b.4 GREEN `src/slack.ts` additions, `src/bot.ts`, routes in `src/app.ts`, production `defer` (`setImmediate` + error logging) in `src/server.ts`.
+- [x] 4b.1 RED `test/app.test.ts`: `/slack/events` rejects bad signature/stale ts; `url_verification` echoes challenge; events with `bot_id` or `X-Slack-Retry-Num` ignored; `/slack/commands` returns empty 200 before background work completes (collecting `defer`).
+- [x] 4b.2 RED `test/bot.test.ts`: decision table: project arg -> `in_channel`; no arg + linked channel -> `in_channel` (one block per project, divider, name order); no arg + unlinked -> ephemeral help; unknown/ambiguous -> ephemeral candidates; Linear error -> ephemeral error; `@bot` strips `<@U...>` tokens, help via `postEphemeral`; accepts any command name.
+- [x] 4b.3 RED `test/slack.test.ts`: `postEphemeral`, `respond(responseUrl, text, visibility)`.
+- [x] 4b.4 GREEN `src/slack.ts` additions, `src/bot.ts`, routes in `src/app.ts`, production `defer` (`setImmediate` + error logging) in `src/server.ts`.
 - Verify: `pnpm test`, `pnpm typecheck`; manual on staging: `/estado-dev <project>` in a channel without the bot, `/estado-dev` in unlinked channel, `@notificaciones-dev` in `#test`.
 
 ---
