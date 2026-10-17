@@ -8,7 +8,7 @@ export type MentionPlan = { actor: string; assignee: string | null; cc: string[]
 
 const FALLBACK_NAME = "Alguien";
 
-const escapeText = (value: string): string =>
+export const escapeText = (value: string): string =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 const escapeUrl = (value: string): string => value.replace(/&/g, "&amp;");
