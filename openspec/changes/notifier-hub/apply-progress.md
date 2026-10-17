@@ -277,3 +277,33 @@ Slice 3c: 5/5 tasks complete (37/37 across 1a-3c). Slices 4a-6 remain. Suite 196
 - Suite 206/206, typecheck clean. Size vs origin/develop (src+test): 756 insertions, 70 deletions.
 - Batch 7c: `deactivateMissing` is a no-op (with a warning) when Linear returns no users, and deactivation only sets `active=false` (Slack id and match source, manual included, are kept). A returning manual row is restored as-is; an auto row is re-matched by email on sync. Suite 208/208.
 - Batch 7d: `listUsers` flags a page-capped result (`truncated`); `deactivateMissing` skips (with a warning) for a truncated read or a list with no active user; the People GET reactivates stored inactive people who are active again (data untouched). Suite 212/212.
+
+## Batch 8 - Slice 4a (Status summary: Linear snapshot + pure logic)
+
+Mode: Strict TDD. Branch: `feat/kamaiti-81-status-summary` (base `origin/develop`, 1a-3c merged). Linear: KAMAITI-81.
+
+### Completed
+- [x] 4a.1 RED/GREEN `test/linear.test.ts` + `projectSnapshot` (one query per page, issues paginated and capped at 1,000 / 10 pages with warning and `truncated`, 60s per-project cache, in-flight sharing, 30s failure replay, fixed error strings, missing project -> unexpected response)
+- [x] 4a.2 `test/status.test.ts` + `summarizeProject` / `renderStatus` / `renderStatusMessage` (states by position, rolling 7-day completed, overdue, due this week, active milestone, cap 10 with "+N más", plain names, escaping)
+- [x] 4a.3 `matchProject` (NFD normalize, exact -> unique prefix -> unique substring, multiple, none)
+- [x] 4a.4 GREEN `src/linear.ts` (`post` generalized, `memo` generic with TTL), `src/status.ts`; `escapeText` exported from `src/notify.ts`
+
+### TDD Cycle Evidence
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| 4a.1 | `test/linear.test.ts` | Unit (fake fetch) | 212/212 | Failed (`projectSnapshot` missing) | 218/218 | shape, cursors, malformed nodes, cap, TTL edge (60,000 vs +1), per-project cache, in-flight, failure replay, null project | `query` split into `post` + connection reader; `memo` generic |
+| 4a.2-4a.3 | `test/status.test.ts` | Unit (pure) | 218/218 | Written before `src/status.ts` (module absent); a RED run was not captured because of a shell error, GREEN reached on first run | 233/233 | window edges, Sunday/Monday, Lima midnight (04:59:59Z vs 05:00:00Z), Tokyo, milestone skip rules, cap, hostile text, divider, ambiguity | Clean |
+
+### Deviations from design/tasks
+- Week boundary: "due this week" = local calendar day today through the coming Sunday (just today on Sunday); overdue = due date before today. Day computed with `Intl` in `STATUS_TIME_ZONE`.
+- "Completed in the last 7 days" is a rolling 7x24h window ending now (tz independent), counting any issue with `completedAt`.
+- Active milestone = first by `sortOrder` with at least one non-canceled issue and below 100%; a milestone with no issues is skipped.
+- Lists are capped in the renderer (heading keeps the full count); `summarizeProject` returns full lists.
+- Empty project renders "Sin tareas."; empty overdue/due/milestone sections are omitted. A truncated snapshot (1,000 issues) appends a note.
+- Divider between projects is `──────────`; blocks are sorted by name (Spanish collation).
+- Issue lines show the identifier as plain text (snapshot has no URL), per the mockup.
+- `matchProject` is generic over `{ name }` and returns `{kind:"match"|"multiple"|"none"}`.
+- Size: 561 insertions + 11 deletions vs origin/develop (src+test), above the ~400 budget (tests ~330). Boundary: snapshot commit (~230) vs status commit (~340).
+
+### Status
+Slice 4a: 4/4 tasks complete (41/41 across 1a-4a). Slices 4b-6 remain. Suite 233/233, typecheck clean.
