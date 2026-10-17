@@ -185,11 +185,11 @@ Checklist:
 - Linear ticket: "Pantalla de personas y vinculacion con Slack" - Vincular usuarios de Linear con usuarios de Slack por correo y permitir correcciones manuales que no se sobrescriben al sincronizar.
 
 Checklist:
-- [ ] 3c.1 RED `test/people.test.ts`: `syncPeople` match by email (auto), not found (unmatched), manual row never overwritten, clear override returns to auto, Linear unreachable keeps existing rows, no lookup per event.
-- [ ] 3c.2 RED client tests: `listUsers` shape (active, email); `lookupUserByEmail` `users_not_found` -> null.
-- [ ] 3c.3 RED `test/admin.test.ts`: People page shows mixed states (auto/manual/unmatched); `POST /admin/people/sync` and `/override` (CSRF, 303).
-- [ ] 3c.4 GREEN `src/people.ts`, client methods, People page and handlers.
-- [ ] 3c.5 Wire `store` people into mention planning in the webhook path (replace stub from 2b if any) with a test.
+- [x] 3c.1 RED `test/people.test.ts`: `syncPeople` match by email (auto), not found (unmatched), manual row never overwritten, clear override returns to auto, Linear unreachable keeps existing rows, no lookup per event.
+- [x] 3c.2 RED client tests: `listUsers` shape (active, email); `lookupUserByEmail` `users_not_found` -> null.
+- [x] 3c.3 RED `test/admin.test.ts`: People page shows mixed states (auto/manual/unmatched); `POST /admin/people/sync` and `/override` (CSRF, 303).
+- [x] 3c.4 GREEN `src/people.ts`, client methods, People page and handlers.
+- [x] 3c.5 Wire `store` people into mention planning in the webhook path (replace stub from 2b if any) with a test.
 - Verify: `pnpm test`, `pnpm typecheck`; manual on staging: sync people, confirm every `@kamailab.com` member matches.
 
 ---

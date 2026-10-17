@@ -90,7 +90,7 @@ test("people upsert keeps one row per linear user and replaces its mapping", () 
   store.upsertPerson({ linearUserId: "u1", name: "Ana P", email: "ana@kamailab.com", slackUserId: "U1", matchSource: "auto" });
   store.upsertPerson({ linearUserId: "u2", name: "Beto", email: null, slackUserId: "U2", matchSource: "manual" });
   assert.deepEqual(store.getPerson("u1"), {
-    linearUserId: "u1", name: "Ana P", email: "ana@kamailab.com", slackUserId: "U1", matchSource: "auto",
+    linearUserId: "u1", name: "Ana P", email: "ana@kamailab.com", slackUserId: "U1", matchSource: "auto", active: true,
   });
   assert.equal(store.getPerson("nope"), null);
   assert.deepEqual(store.listPeople().map((p) => p.linearUserId), ["u1", "u2"]);
@@ -179,4 +179,19 @@ test("sweepInterrupted relabels only old in-flight rows", () => {
   const reasons = Object.fromEntries(store.recentEvents().map((e) => [e.deliveryId, e.reason]));
   assert.deepEqual(reasons, { old: "interrupted", done: "post-failed", fresh: "in-flight" });
   assert.equal(store.sweepInterrupted(5 * 60_000), 0);
+});
+
+test("recentEvents can exclude unclassified rows before applying the limit", () => {
+  const { store } = setup();
+  store.insertEvent(entry("d1", { issueIdentifier: "KAM-1" }));
+  for (let i = 2; i <= 4; i += 1) store.insertEvent(entry(`d${i}`, { kind: "unclassified", outcome: "skipped", reason: "x", targets: [] }));
+  assert.equal(store.recentEvents(2).length, 2);
+  assert.deepEqual(store.recentEvents(2, { hideUnclassified: true }).map((e) => e.issueIdentifier), ["KAM-1"]);
+});
+
+test("people are active by default and the flag round-trips", () => {
+  const { store } = setup();
+  store.upsertPerson({ linearUserId: "u1", name: "A", email: null, slackUserId: null, matchSource: "unmatched" });
+  store.upsertPerson({ linearUserId: "u2", name: "B", email: null, slackUserId: null, matchSource: "unmatched", active: false });
+  assert.deepEqual(store.listPeople().map((p) => p.active), [true, false]);
 });

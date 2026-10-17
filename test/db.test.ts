@@ -194,6 +194,15 @@ test("migration 2 adds issue and assignee ids to event_log and keeps existing ro
   const columns = (db.prepare("PRAGMA table_info(event_log)").all() as { name: string }[]).map((c) => c.name);
   assert.ok(columns.includes("issue_id") && columns.includes("assignee_id"));
   assert.deepEqual(deliveryIds(db), ["old"]);
-  assert.equal(migrations.length, 2);
+  assert.equal(migrations.length, 3);
+  db.close();
+});
+
+test("migration 3 adds an active flag to people, defaulting existing rows to active", () => {
+  const db = new DatabaseSync(":memory:");
+  migrate(db, migrations.slice(0, 2));
+  db.prepare("INSERT INTO people (linear_user_id, name, match_source, updated_at) VALUES ('u1', 'A', 'auto', 'x')").run();
+  migrate(db);
+  assert.equal((db.prepare("SELECT active FROM people").get() as { active: number }).active, 1);
   db.close();
 });
