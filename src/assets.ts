@@ -25,14 +25,18 @@ export const assetUrl = (name: string): string => {
 };
 
 // `name` must be an exact key: separators or traversal can never match.
-export const serveAsset = (res: ServerResponse, name: string, version: string | null): void => {
+// `extra` (the admin security headers) is applied first, so the asset's own headers always win.
+export const serveAsset = (
+  res: ServerResponse, name: string, version: string | null, extra: Record<string, string> = {},
+): void => {
   const asset = assets.get(name);
   if (!asset) {
-    res.writeHead(404, { "content-type": "text/plain; charset=utf-8", "x-content-type-options": "nosniff" });
+    res.writeHead(404, { ...extra, "content-type": "text/plain; charset=utf-8", "x-content-type-options": "nosniff" });
     res.end("not found");
     return;
   }
   res.writeHead(200, {
+    ...extra,
     "content-type": asset.type,
     "x-content-type-options": "nosniff",
     "cache-control": version === asset.version ? IMMUTABLE : "no-cache",

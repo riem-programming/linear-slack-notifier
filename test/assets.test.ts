@@ -7,7 +7,7 @@ import { assetUrl, serveAsset } from "../src/assets.ts";
 const withServer = async (run: (base: string) => Promise<void>): Promise<void> => {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "", "http://localhost");
-    serveAsset(res, decodeURIComponent(url.pathname.slice("/admin/assets/".length)), url.searchParams.get("v"));
+    serveAsset(res, decodeURIComponent(url.pathname.slice("/admin/assets/".length)), url.searchParams.get("v"), { "content-security-policy": "default-src 'self'", "cache-control": "no-store" });
   });
   await new Promise<void>((resolve) => server.listen(0, resolve));
   try {
@@ -66,4 +66,14 @@ test("unknown names and path separators answer 404", () =>
       assert.equal(res.status, 404, name);
       assert.equal(res.headers.get("x-content-type-options"), "nosniff", name);
     }
+  }));
+
+test("extra headers are added to 200 and 404 but never override the asset cache policy", () =>
+  withServer(async (base) => {
+    const ok = await fetch(`${base}/admin.css?v=${versionOf("admin.css")}`);
+    const missing = await fetch(`${base}/nope.css`);
+    assert.equal(ok.headers.get("content-security-policy"), "default-src 'self'");
+    assert.equal(ok.headers.get("cache-control"), "public, max-age=31536000, immutable");
+    assert.equal(missing.headers.get("content-security-policy"), "default-src 'self'");
+    assert.equal(missing.headers.get("cache-control"), "no-store");
   }));

@@ -342,7 +342,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
     // Static assets carry no admin data, so they are served before authentication.
     if (path.startsWith(ASSETS_PREFIX) && (req.method === "GET" || req.method === "HEAD")) {
       const version = new URL(req.url ?? "", "http://localhost").searchParams.get("v");
-      return serveAsset(res, safeDecode(path.slice(ASSETS_PREFIX.length)), version);
+      return serveAsset(res, safeDecode(path.slice(ASSETS_PREFIX.length)), version, SECURITY_HEADERS);
     }
     if (!checkBasicAuth(req.headers.authorization, password)) {
       return send(res, 401, { error: "unauthorized" }, { ...SECURITY_HEADERS, "www-authenticate": 'Basic realm="Notifier Hub", charset="UTF-8"' });
