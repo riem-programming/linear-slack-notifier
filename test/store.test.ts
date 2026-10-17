@@ -291,3 +291,40 @@ test("corrupted mentions and targets JSON reads back as null and empty instead o
   assert.deepEqual(rows.map((r) => r.mentions), [["ok", "two"], null, null, null]);
   assert.deepEqual(rows[3]?.targets, []);
 });
+
+const linkedIds = (store: ReturnType<typeof setup>["store"], channel: string): string[] => store.projectsForChannel(channel).map((p) => p.id).sort();
+
+test("setChannelProjects links the additions, unlinks the removals and reports the counts", () => {
+  const { store } = setup();
+  store.link("C1", "p1");
+  assert.deepEqual(store.setChannelProjects("C1", ["p2"]), { linked: 1, unlinked: 1 });
+  assert.deepEqual(linkedIds(store, "C1"), ["p2"]);
+  assert.deepEqual(store.setChannelProjects("C1", ["p1", "p2"]), { linked: 1, unlinked: 0 });
+  assert.deepEqual(linkedIds(store, "C1"), ["p1", "p2"]);
+});
+
+test("setChannelProjects with an unchanged set is a no-op and an empty list unlinks everything", () => {
+  const { store } = setup();
+  store.link("C1", "p1");
+  assert.deepEqual(store.setChannelProjects("C1", ["p1", "p1"]), { linked: 0, unlinked: 0 });
+  assert.deepEqual(linkedIds(store, "C1"), ["p1"]);
+  assert.deepEqual(store.setChannelProjects("C1", []), { linked: 0, unlinked: 1 });
+  assert.deepEqual(linkedIds(store, "C1"), []);
+});
+
+test("setChannelProjects leaves other channels untouched", () => {
+  const { store } = setup();
+  store.link("C2", "p1");
+  store.setChannelProjects("C1", ["p1", "p2"]);
+  store.setChannelProjects("C1", []);
+  assert.deepEqual(linkedIds(store, "C2"), ["p1"]);
+});
+
+test("setChannelProjects rolls back every change when one statement fails", () => {
+  const { store } = setup();
+  store.link("C1", "p1");
+  assert.throws(() => store.setChannelProjects("C1", ["p2", "missing"]));
+  assert.deepEqual(linkedIds(store, "C1"), ["p1"]);
+  // The connection is usable afterwards (no dangling transaction).
+  assert.deepEqual(store.setChannelProjects("C1", ["p2"]), { linked: 1, unlinked: 1 });
+});

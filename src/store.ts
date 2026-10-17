@@ -62,6 +62,8 @@ export type Store = {
   listProjects: () => Project[];
   link: (channelId: string, projectId: string) => boolean;
   unlink: (channelId: string, projectId: string) => boolean;
+  // Makes the channel's links equal `projectIds` in one transaction; throws (and changes nothing) on any failure.
+  setChannelProjects: (channelId: string, projectIds: string[]) => { linked: number; unlinked: number };
   channelsFor: (projectId: string) => Channel[];
   projectsForChannel: (channelId: string) => Project[];
   upsertPerson: (person: Person) => void;
@@ -147,6 +149,24 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
       ) === 1,
     unlink: (channelId, projectId) =>
       Number(db.prepare("DELETE FROM channel_projects WHERE channel_id = ? AND project_id = ?").run(channelId, projectId).changes) === 1,
+    setChannelProjects: (channelId, projectIds) => {
+      const wanted = new Set(projectIds);
+      db.exec("BEGIN");
+      try {
+        const current = new Set(all("SELECT project_id FROM channel_projects WHERE channel_id = ?", channelId).map((row) => row.project_id as string));
+        const add = [...wanted].filter((id) => !current.has(id));
+        const remove = [...current].filter((id) => !wanted.has(id));
+        const insert = db.prepare("INSERT INTO channel_projects (channel_id, project_id, created_at) VALUES (?, ?, ?)");
+        const drop = db.prepare("DELETE FROM channel_projects WHERE channel_id = ? AND project_id = ?");
+        for (const id of add) insert.run(channelId, id, stamp());
+        for (const id of remove) drop.run(channelId, id);
+        db.exec("COMMIT");
+        return { linked: add.length, unlinked: remove.length };
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
     channelsFor: (projectId) =>
       all(
         `SELECT c.* FROM channels c JOIN channel_projects l ON l.channel_id = c.id

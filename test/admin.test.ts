@@ -1006,3 +1006,85 @@ test("people page reactivates stored people who are active again in Linear", () 
     assert.match(rowOf(text, "Luis"), /Manual[\s\S]*UMAN/);
     assert.equal(store.getPerson("u1")?.active, true);
   }, { users: async () => LINEAR_USERS }));
+
+// Repeated `project` fields, like the checklist form of a channel sheet.
+const saveProjects = async (h: Harness, channel: string, projects: string[], extra: Record<string, string> = {}, token?: string): Promise<Response> => {
+  const body = new URLSearchParams({ csrf: token ?? h.csrf, ...extra });
+  for (const project of projects) body.append("project", project);
+  return fetch(`${h.base}/admin/channels/${channel}/projects`, {
+    method: "POST", redirect: "manual",
+    headers: { ...h.auth, origin: `http://${h.host}`, "content-type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+};
+
+test("saving a channel's projects applies the diff in one request and redirects with a flash", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    h.store.link("C1", "p1");
+    h.store.link("C2", "p1");
+    const res = await saveProjects(h, "C1", ["p2"]);
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get("location"), "/admin/channels?status=channel-saved");
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p2"]);
+    assert.deepEqual(h.store.projectsForChannel("C2").map((p) => p.id), ["p1"]);
+    const text = await (await fetch(`${h.base}/admin/channels?status=channel-saved`, { headers: h.auth })).text();
+    assert.match(text, /Proyectos del canal guardados/);
+  }));
+
+test("saving dedupes repeated ids and an empty list unlinks everything", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    assert.equal((await saveProjects(h, "C1", ["p1", "p2", "p1"])).status, 303);
+    assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id).sort(), ["p1", "p2"]);
+    assert.equal((await saveProjects(h, "C1", [])).status, 303);
+    assert.deepEqual(h.store.projectsForChannel("C1"), []);
+  }));
+
+test("saving with an unknown project, unknown channel or bad channel id answers 400 and changes nothing", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    h.store.link("C1", "p1");
+    for (const [channel, projects] of [["C1", ["p2", "NOPE"]], ["C9", ["p1"]], ["%E0%A4%A", ["p1"]], ["C1%2F..", ["p1"]], ["c1", ["p1"]], ["C1", [""]]] as [string, string[]][]) {
+      const res = await saveProjects(h, channel, projects);
+      assert.equal(res.status, 400, `${channel} ${projects.join()}`);
+      assert.equal(res.headers.get("location"), null);
+    }
+    assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p1"]);
+    assert.deepEqual(h.store.projectsForChannel("C2"), []);
+  }));
+
+test("saving more than 200 projects is rejected", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    const many = Array.from({ length: 201 }, (_, i) => `p${i}`);
+    assert.equal((await saveProjects(h, "C1", many)).status, 400);
+    assert.deepEqual(h.store.projectsForChannel("C1"), []);
+  }));
+
+test("saving a channel's projects enforces session, Origin and the session-bound csrf token", () =>
+  withApp(async (h) => {
+    seedChannels(h.store);
+    assert.equal((await saveProjects(h, "C1", ["p1"], {}, "0".repeat(64))).status, 403);
+    assert.equal((await saveProjects(h, "C1", ["p1"], {}, "")).status, 403);
+    const body = form({ csrf: h.csrf, project: "p1" });
+    const post = (headers: Record<string, string>) =>
+      fetch(`${h.base}/admin/channels/C1/projects`, { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", ...headers }, body });
+    assert.equal((await post({ ...h.auth, origin: "https://evil.example" })).status, 403);
+    assert.equal((await post({ ...h.auth })).status, 403);
+    assert.equal((await post({ origin: `http://${h.host}` })).status, 401);
+    assert.deepEqual(h.store.projectsForChannel("C1"), []);
+  }));
+
+test("a store failure while saving rolls back and answers 500 without leaking details", async () => {
+  const logs: string[] = [];
+  await withApp(async (h) => {
+    seedChannels(h.store);
+    h.store.link("C1", "p1");
+    const res = await saveProjects(h, "C1", ["p2"]);
+    assert.equal(res.status, 500);
+    assert.doesNotMatch(await res.text(), /disk exploded/);
+    assert.deepEqual(h.store.projectsForChannel("C1").map((p) => p.id), ["p1"]);
+  }, { logs, wrapStore: (s) => ({ ...s, setChannelProjects: () => { throw new Error("disk exploded"); } }) });
+});
