@@ -110,3 +110,10 @@ Mode: Strict TDD. Branch: `feat/kamaiti-76-classify-and-render` (base `origin/de
 
 ### Status
 Slice 2a: 5/5 tasks complete (18/18 across 1a, 1b, 2a counting 1a=6, 1b=7). Slices 2b-6 remain. Suite 88/88, typecheck clean.
+
+### Batch 3b - Review fixes on slice 2a (strict TDD, tests first)
+- Removed the 10s created/assigned suppression and the `now` param from `classifyEvent`: it suppressed deliberate assignments made seconds after creating an unassigned issue. D10 is now implemented in slice 2b via the event log (suppress `assigned` only if a `created` notice exists for the same issue id and assignee id). design.md D10 and tasks.md (new 2b.2a) updated; `assigned-at-create` reason is out of 2a.
+- Restored the old rule: assignee/cc with no name and no Slack mapping is dropped. `renderNotice` returns `string | null` (null for `assigned` without a writable assignee; `app.ts` logs ignored with `assignee not resolvable`). "Alguien" remains only the actor fallback.
+- `app.ts`: no logging for non-Issue payloads; Issue events log `Issue event: kind= actor= actor_mapped= assignee= assignee_mapped=` and `Issue event ignored: action= reason=`.
+- New app tests with ids `__proto__`, `constructor`, `toString` prove the `Object.hasOwn` guard.
+- Suite 95/95, typecheck clean.

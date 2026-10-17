@@ -27,7 +27,7 @@ Business logic lives in pure functions: classify, plan mentions, render, aggrega
 | D8 | Admin CSRF | Every POST must pass two checks: `Origin` (or `Referer`) must match `Host`, and a hidden `csrf` field must equal `HMAC(processSecret, "admin-csrf")`. Admin pages are also sent with `X-Frame-Options: DENY`, `CSP default-src 'self'`, and `Cache-Control: no-store`. | Relying on Basic Auth | Browsers send Basic credentials on cross-site requests automatically, so Basic Auth alone does not stop CSRF. The token rotates on restart, so a stale form gets a 403 and the user reloads. |
 | D9 | Event-log scope and idempotency | Log every verified webhook. Unrecognized events get kind `unclassified`, outcome `skipped`, and a reason. Per-channel results go in a JSON `targets` column. The `Linear-Delivery` header goes in `delivery_id UNIQUE`, and the insert happens **before** posting, so a redelivery hits the constraint and is not posted twice. | A separate targets table; logging only classified events | The spec (event-log) requires every verified webhook, per-target outcomes, and no double posting. JSON keeps the schema small, and the retention cap absorbs the extra volume. |
 | D11 | Emoji and list contents | ✅ completed and 🚫 canceled. Status uses 📊, ⚠️ (overdue), 📅 (due this week), and 🎯 (milestone). The Channels list shows public channels plus the private channels the bot is in, which is all `groups:read` returns. Members show as "joined", others as "invite the bot". | Listing every private channel | Bot tokens cannot see private channels they are not in. |
-| D10 | Created already assigned | `create` with an assignee renders a single "created" notice. An `update` whose `updatedFrom.assigneeId` is null and that arrives within 10s of `data.createdAt` is logged as skipped with reason `assigned-at-create`. | Rely on Linear's ordering | Guards against duplicate notices. |
+| D10 | Created already assigned | `create` with an assignee renders a single "created" notice. `classifyEvent` emits `assigned` for every assignee change to a value (no time-window heuristic, so a deliberate assignment seconds after creating an unassigned issue still notifies). In slice 2b the route suppresses an `assigned` notice only if the event log already holds a `created` notice for the same issue id with the same assignee id; the suppressed event is logged as skipped with reason `assigned-at-create`. | A 10s window after `createdAt` | A time window wrongly suppresses deliberate assignments. The event log gives an exact check. |
 
 ## Module Layout (flat `src/`)
 
@@ -129,7 +129,7 @@ Rules applied to the candidates:
 
 1. Remove duplicates.
 2. Drop the actor. The actor's name is written as plain text.
-3. A person with a `slack_user_id` gets `<@U…>`. Anyone else is written as their escaped plain name. If the name comes from neither the payload nor `people`, write "Alguien".
+3. A person with a `slack_user_id` gets `<@U…>`. Anyone else is written as their escaped plain name. An assignee or cc person with neither a name nor a Slack mapping is dropped (an `assigned` notice for them is ignored, `created` omits the "se lo asignó" suffix, cc omits them). "Alguien" is only the actor fallback.
 
 The copy follows the proposal mockups, so "resolvió" becomes "completó".
 
