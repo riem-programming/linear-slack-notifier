@@ -349,3 +349,7 @@ Mode: Strict TDD. Branch: `feat/kamaiti-82-bot-endpoints` (base `origin/develop`
 
 ### Status
 Slice 4b: 4/4 tasks complete (45/45 across 1a-4b). Slices 5-6 remain. Suite 263/263, typecheck clean.
+
+### Batch 9b - Review fixes on slice 4b (strict TDD, tests first)
+- `parseMention` decodes `&lt; &gt; &amp;` after stripping `<@U..>` (no double escaping); slack routes use a `Map`; `postEphemeral` takes `threadTs`; `respond` cancels the body on non-2xx; help names the payload `command` (validated `^/[a-z0-9_-]{1,32}$`, fallback `/estado`, also for mentions).
+- Suite 269/269, typecheck clean. Size vs origin/develop (src+test): 540 insertions, 11 deletions.
