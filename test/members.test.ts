@@ -2,7 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { filterMembers, type SlackMember } from "../src/members.ts";
 
-const m = (id: string, name: string, handle: string, email: string | null = null): SlackMember => ({ id, name, handle, email });
+const m = (id: string, name: string, handle: string, email: string | null = null, displayName = ""): SlackMember => ({
+  id,
+  realName: name,
+  displayName,
+  handle,
+  email,
+});
 const members = [
   m("U1", "José Álvarez", "jalvarez", "jose@kamailab.com"),
   m("U2", "Luis Pérez", "lperez"),
@@ -17,10 +23,17 @@ test("filterMembers matches name, handle and email ignoring accents and case", (
   assert.deepEqual(filterMembers(members, "álvarez").map((x) => x.id), ["U1"]);
 });
 
+test("filterMembers finds a member by display name and by real name", () => {
+  const list = [m("U9", "Luis Pérez", "luisp", null, "lpz")];
+  assert.equal(filterMembers(list, "lpz").length, 1);
+  assert.equal(filterMembers(list, "PEREZ").length, 1);
+  assert.equal(filterMembers(list, "nope").length, 0);
+});
+
 test("filterMembers returns the first members for a blank query and nothing for no match", () => {
   assert.equal(filterMembers(members, "   ").length, 3);
   assert.deepEqual(filterMembers(members, "zzz"), []);
-  assert.deepEqual(filterMembers(members, "@"). map((x) => x.id), ["U1", "U3"]);
+  assert.deepEqual(filterMembers(members, "@").map((x) => x.id), ["U1", "U3"]);
 });
 
 test("filterMembers caps results at the limit (default 50) and keeps order", () => {

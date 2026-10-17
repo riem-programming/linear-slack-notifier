@@ -107,11 +107,11 @@ export const createSlackApi = ({
 
   const toMember = (user: SlackUser): SlackMember | null => {
     if (!user.id || user.deleted || user.is_bot || user.is_app_user || user.id === "USLACKBOT") return null;
-    const handle = user.name ?? "";
     return {
       id: user.id,
-      name: user.real_name || user.profile?.display_name || handle || user.id,
-      handle,
+      realName: user.real_name ?? "",
+      displayName: user.profile?.display_name ?? "",
+      handle: user.name ?? "",
       email: user.profile?.email || null,
     };
   };
@@ -119,6 +119,7 @@ export const createSlackApi = ({
   const loadMembers = async (): Promise<SlackMember[]> => {
     const members: SlackMember[] = [];
     let cursor = "";
+    let capped = false;
     for (let pageNumber = 0; pageNumber < MAX_MEMBER_PAGES; pageNumber += 1) {
       const params = new URLSearchParams({ limit: "200" });
       if (cursor) params.set("cursor", cursor);
@@ -129,13 +130,22 @@ export const createSlackApi = ({
       }
       cursor = result.response_metadata?.next_cursor ?? "";
       if (!cursor) break;
+      capped = pageNumber === MAX_MEMBER_PAGES - 1;
     }
-    return members.sort((a, b) => foldText(a.name).localeCompare(foldText(b.name)));
+    if (capped) logger.warn(`Slack members list truncated at ${MAX_MEMBER_PAGES} pages`);
+    const label = (member: SlackMember): string => foldText(member.displayName || member.realName || member.handle);
+    return members.sort((a, b) => label(a).localeCompare(label(b)));
   };
 
   let lastGood: SlackMember[] | null = null;
+  let warned = false; // one warning per failure episode; a successful refresh resets it
   const cachedMembers = memo(
-    async () => (lastGood = await loadMembers()),
+    async () => {
+      const members = await loadMembers();
+      lastGood = members;
+      warned = false;
+      return members;
+    },
     { ttl: MEMBERS_TTL_MS, now },
   );
   const listMembers = async (): Promise<SlackMember[]> => {
@@ -143,7 +153,10 @@ export const createSlackApi = ({
       return await cachedMembers();
     } catch (error) {
       if (!lastGood) throw error;
-      logger.warn("Slack members refresh failed; serving the previous list");
+      if (!warned) {
+        warned = true;
+        logger.warn(`Slack members refresh failed (${error instanceof Error ? error.message : "unknown error"}); serving the previous list`);
+      }
       return lastGood;
     }
   };

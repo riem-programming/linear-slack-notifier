@@ -206,7 +206,12 @@ Completed: 5a.1, 5a.2, 5a.3, 5a.4. Remaining: slice 5b.
 
 ### Notes and deviations
 - `memo(load, { ttl, now })` replaces the closure inside `createLinearApi`; the fallback error for non-Error rejections is now "Request failed" (was "Linear request failed"; unreachable in practice, untested before).
-- Member shape is `{ id, name, handle, email | null }` (as requested for this slice), not the design's `realName`/`displayName` pair: `name` is `real_name`, then `profile.display_name`, then the handle. Search covers name, handle and email.
+- Member shape is `{ id, realName, displayName, handle, email | null }` per design U14 (see review follow-up).
 - `filterMembers` lives in `src/members.ts` with the `SlackMember` type; `listMembers` is in `slack.ts` (`createSlackApi` gained optional `now` and `logger`).
 - Stale-list fallback is in `listMembers`, not in `memo`: the last good list is kept outside the memo and served with a fixed warning when a refresh fails.
 - Not wired into `admin.ts`/`app.ts` (5b). The `SlackApi` type gained `listMembers`; existing partial fakes still typecheck.
+
+### Review follow-up on slice 5a
+- `SlackMember` follows U14: `realName`, `displayName` (empty string when absent), `handle`, `email | null`; `filterMembers` searches all four; sort by folded `displayName || realName || handle`.
+- Page-cap truncation logs a fixed warning (no ids, no cursor).
+- Stale-list warning includes the Slack error code and fires once per failure episode (reset after a successful refresh). Tests: concurrent callers and a replayed failure both get the stale list. `pnpm test` 409/409, `pnpm typecheck` clean.
