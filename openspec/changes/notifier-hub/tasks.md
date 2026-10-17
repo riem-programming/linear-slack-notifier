@@ -57,12 +57,12 @@ Decision resolved: user chose chained PRs; base branch is `develop` (not `main`)
 - Linear ticket: "Capa de persistencia SQLite" - Agregar base de datos SQLite con migraciones versionadas y consultas tipadas para canales, proyectos, personas y bitacora de eventos.
 
 Checklist:
-- [ ] 1a.1 RED `test/db.test.ts`: `openDb(":memory:")` sets WAL/foreign_keys; `migrate` upgrades from version 0, is idempotent on re-run (persistence: Fresh database, Older schema, Re-run); unwritable path throws a clear error.
-- [ ] 1a.2 RED `test/db.test.ts`: `pruneEventLog` deletes rows older than N days and caps at 5,000 rows; `backup` writes `notifier-YYYYMMDD.db` via `VACUUM INTO` and keeps newest 7.
-- [ ] 1a.3 GREEN `src/db.ts`: `openDb`, ordered migration array (schema from design, migration 1), `PRAGMA user_version`, per-migration transaction, `pruneEventLog`, `backup`.
-- [ ] 1a.4 RED `test/store.test.ts`: many-to-many links (one project/two channels, one channel/two projects, duplicate link is a no-op), `channelsFor(projectId)`, `projectsForChannel`, upsert channels/projects, people upsert, event_log insert with duplicate `delivery_id` rejected, recent-50 query.
-- [ ] 1a.5 GREEN `src/store.ts`: `createStore(db)` with the typed queries above.
-- [ ] 1a.6 REFACTOR: confirm all SQL is only in `store.ts`/`db.ts`.
+- [x] 1a.1 RED `test/db.test.ts`: `openDb(":memory:")` sets WAL/foreign_keys; `migrate` upgrades from version 0, is idempotent on re-run (persistence: Fresh database, Older schema, Re-run); unwritable path throws a clear error.
+- [x] 1a.2 RED `test/db.test.ts`: `pruneEventLog` deletes rows older than N days and caps at 5,000 rows; `backup` writes `notifier-YYYYMMDD.db` via `VACUUM INTO` and keeps newest 7.
+- [x] 1a.3 GREEN `src/db.ts`: `openDb`, ordered migration array (schema from design, migration 1), `PRAGMA user_version`, per-migration transaction, `pruneEventLog`, `backup`.
+- [x] 1a.4 RED `test/store.test.ts`: many-to-many links (one project/two channels, one channel/two projects, duplicate link is a no-op), `channelsFor(projectId)`, `projectsForChannel`, upsert channels/projects, people upsert, event_log insert with duplicate `delivery_id` rejected, recent-50 query.
+- [x] 1a.5 GREEN `src/store.ts`: `createStore(db)` with the typed queries above.
+- [x] 1a.6 REFACTOR: confirm all SQL is only in `store.ts`/`db.ts`.
 - Verify: `pnpm test`, `pnpm typecheck`.
 
 ---
