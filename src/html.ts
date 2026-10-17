@@ -44,6 +44,9 @@ th{background:#eaeef2}
 .outcome{font-weight:600}
 .notified{color:#1a7f37}.skipped{color:#9a6700}.failed{color:#cf222e}
 .muted{color:#57606a}
+.flash-ok{color:#1a7f37;font-weight:600}.flash-error{color:#cf222e;font-weight:600}
+.invite{color:#9a6700}.joined{color:#1a7f37}
+form{margin:.25rem 0}
 `;
 
 type LayoutOptions = { title: string; current: NavKey; body: Html };

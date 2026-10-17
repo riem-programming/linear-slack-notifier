@@ -2,6 +2,7 @@ import { createApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import type { Config } from "./config.ts";
 import { backup, openDb, pruneEventLog } from "./db.ts";
+import { createLinearApi } from "./linear.ts";
 import { createSlackApi } from "./slack.ts";
 import { createStore } from "./store.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -54,6 +55,7 @@ const start = (): void => {
     adminPassword: config.adminPassword,
     timeZone: config.statusTimeZone,
     slack: createSlackApi({ token: config.slackBotToken }),
+    linear: createLinearApi({ apiKey: config.linearApiKey }),
   });
 
   server.listen(config.port, () => {
