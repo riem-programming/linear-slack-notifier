@@ -49,7 +49,7 @@ const SESSION_SECRET_MIN_BYTES = 32;
 
 // A missing or short secret does not stop boot: the admin stays disabled (fails closed) and webhooks keep working.
 const sessionSecret = (env: Env): string | null => {
-  const value = env.SESSION_SECRET;
+  const value = env.SESSION_SECRET?.trim();
   return value && Buffer.byteLength(value) >= SESSION_SECRET_MIN_BYTES ? value : null;
 };
 

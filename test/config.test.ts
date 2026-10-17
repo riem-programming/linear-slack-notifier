@@ -86,4 +86,6 @@ test("sessionSecret is null when unset or shorter than 32 bytes", () => {
   assert.equal(loadConfig({ ...base, SESSION_SECRET: "x".repeat(32) }).sessionSecret, "x".repeat(32));
   assert.equal(loadConfig({ ...base, SESSION_SECRET: "é".repeat(16) }).sessionSecret, "é".repeat(16));
   assert.equal(loadConfig({ ...base, SESSION_SECRET: "é".repeat(15) }).sessionSecret, null);
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: "  " + "x".repeat(32) + "\n" }).sessionSecret, "x".repeat(32));
+  assert.equal(loadConfig({ ...base, SESSION_SECRET: " " + "x".repeat(31) + " " }).sessionSecret, null);
 });
