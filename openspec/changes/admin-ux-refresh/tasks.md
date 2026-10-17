@@ -61,12 +61,12 @@ If a slice exceeds ~400 lines, split tests into a follow-up commit in the same P
 - PR title: `feat(admin): add shared shell layout, components and visual tokens`
 - Linear ticket: "Admin: layout compartido, componentes y estilos" - Nueva barra lateral, componentes y tokens visuales; las pantallas actuales pasan al nuevo layout sin cambiar su funcionalidad.
 - Files: `src/layout.ts`, `src/ui.ts`, `src/icons.ts`, `src/html.ts`, `src/public/admin.css`, `src/admin.ts`, `test/ui.test.ts`, `test/layout.test.ts`, `test/admin.test.ts`.
-- [ ] 1b.1 RED: component tests (`pill`, `segmented`, `insetList`, `sectionHeader`, `button`, `avatar` palette `av-0..7` stable per id, `flash`, `emptyState`, `sheet`): output escaped, no `style=`, no emoji.
-- [ ] 1b.2 RED: `shell` tests: active nav item, env label shown/escaped/hidden when `null`, time zone, logout form, `bare()`.
-- [ ] 1b.3 RED: admin test: every page has no `style=`/`<style>`/inline handler.
-- [ ] 1b.4 GREEN: `icons.ts`, `ui.ts`, `layout.ts`; reduce `html.ts` to the templating core.
-- [ ] 1b.5 GREEN: `admin.css` tokens, components, phone breakpoint (targets 32-44 px).
-- [ ] 1b.6 GREEN: render current Status/Channels/People pages inside `shell`.
+- [x] 1b.1 RED: component tests (`pill`, `segmented`, `insetList`, `sectionHeader`, `button`, `avatar` palette `av-0..7` stable per id, `flash`, `emptyState`, `sheet`): output escaped, no `style=`, no emoji.
+- [x] 1b.2 RED: `shell` tests: active nav item, env label shown/escaped/hidden when `null`, time zone, logout form, `bare()`.
+- [x] 1b.3 RED: admin test: every page has no `style=`/`<style>`/inline handler.
+- [x] 1b.4 GREEN: `icons.ts`, `ui.ts`, `layout.ts`; reduce `html.ts` to the templating core.
+- [x] 1b.5 GREEN: `admin.css` tokens, components, phone breakpoint (targets 32-44 px).
+- [x] 1b.6 GREEN: render current Status/Channels/People pages inside `shell`.
 - Verify: `pnpm test`, `pnpm typecheck`.
 - Staging checklist: sidebar with Estado/Canales/Personas, active item marked, env label shown only if set, time zone shown; narrow the window to see the stacked layout; no emoji; all existing actions still work.
 - USER prerequisites: none.

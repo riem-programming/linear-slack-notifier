@@ -3,12 +3,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { serveAsset } from "./assets.ts";
 import { checkBasicAuth, checkOrigin, csrfToken, verifyCsrf } from "./auth.ts";
 import { BodyTooLargeError, parseForm, readBody, redirect, send, sendHtml } from "./http.ts";
-import { html, layout } from "./html.ts";
+import { html } from "./html.ts";
 import type { Html } from "./html.ts";
+import { bare, shell } from "./layout.ts";
+import type { NavKey } from "./layout.ts";
 import type { LinearApi } from "./linear.ts";
 import { clearOverride, deactivateMissing, reactivateReturning, setOverride, syncPeople } from "./people.ts";
 import type { SlackApi } from "./slack.ts";
 import type { Channel, LoggedEvent, MatchSource, Person, Project, Store } from "./store.ts";
+import { button, emptyState, flash, pill } from "./ui.ts";
+import type { Tone } from "./ui.ts";
 
 type AdminOptions = {
   store: Store;
@@ -20,6 +24,8 @@ type AdminOptions = {
   timeZone: string;
   logger: Pick<Console, "error" | "warn">;
   csrfSecret?: string;
+  // Shown in the sidebar when set (for example "Staging").
+  envLabel?: string | null;
 };
 
 // No 'unsafe-inline': templates must never emit style attributes, style tags or inline scripts.
@@ -43,6 +49,7 @@ const safeDecode = (value: string): string => {
     return "";
   }
 };
+const OUTCOME_TONES: Record<string, Tone> = { notified: "success", skipped: "warning", failed: "error" };
 const MAX_FORM_BYTES = 100_000;
 const RECENT_EVENTS = 50;
 
@@ -82,13 +89,15 @@ const eventRow = (event: LoggedEvent, timeZone: string, channelName: (id: string
 <td>${formatTime(event.receivedAt, timeZone)}</td>
 <td>${KINDS[event.kind] ?? event.kind}</td>
 <td>${issue}</td>
-<td><span class="outcome ${event.outcome}">${OUTCOMES[event.outcome] ?? event.outcome}</span></td>
+<td>${pill(Object.hasOwn(OUTCOME_TONES, event.outcome) ? OUTCOME_TONES[event.outcome] as Tone : "neutral", OUTCOMES[event.outcome] ?? event.outcome)}</td>
 <td>${reason}</td>
 <td>${targets}</td>
 </tr>`;
 };
 
-const statusPage = (store: Store, timeZone: string, showAll: boolean): Html => {
+type Page = (options: { title: string; current: NavKey; body: Html }) => Html;
+
+const statusPage = (store: Store, timeZone: string, showAll: boolean, render: Page): Html => {
   const events = store.recentEvents(RECENT_EVENTS, { hideUnclassified: !showAll });
   const names = new Map(store.listChannels().map((channel) => [channel.id, channel.name]));
   const channelName = (id: string): string => (names.has(id) ? `#${names.get(id)}` : id);
@@ -99,12 +108,12 @@ const statusPage = (store: Store, timeZone: string, showAll: boolean): Html => {
   const empty = !showAll && store.recentEvents(1).length ? "No hay eventos para mostrar." : "Aún no hay eventos registrados.";
   const body = events.length
     ? html`<p class="muted">${events.length === 1 ? "Último evento" : `Últimos ${events.length} eventos`}, del más reciente al más antiguo. Hora: ${timeZone}. ${toggle}</p>
-<table>
+<div class="card"><table>
 <thead><tr><th scope="col">Hora</th><th scope="col">Tipo</th><th scope="col">Incidencia</th><th scope="col">Resultado</th><th scope="col">Motivo</th><th scope="col">Canales</th></tr></thead>
 <tbody>${events.map((event) => eventRow(event, timeZone, channelName))}</tbody>
-</table>`
-    : html`<p>${empty} ${toggle}</p>`;
-  return layout({ title: "Estado", current: "status", body });
+</table></div>`
+    : html`${emptyState(empty)}<p>${toggle}</p>`;
+  return render({ title: "Estado", current: "status", body });
 };
 
 // Flash messages come from a fixed table keyed by a query value: free text is never reflected.
@@ -120,13 +129,13 @@ const FLASH: Record<string, { ok: boolean; text: string }> = {
   "linear-error": { ok: false, text: "No se pudo consultar Linear. Se muestran las personas guardadas." },
   "override-set": { ok: true, text: "Vínculo manual guardado." },
   "override-cleared": { ok: true, text: "Vínculo manual quitado; se volvió a emparejar por correo." },
-  "invalid-slack-id": { ok: false, text: "Ingrese un ID de miembro de Slack válido (por ejemplo U01ABC23DEF)." },
+  "invalid-slack-id": { ok: false, text: "Ingresa un ID de miembro de Slack válido (por ejemplo U01ABC23DEF)." },
   "person-not-found": { ok: false, text: "No se encontró a la persona indicada." },
 };
 
 const flashNotice = (status: string | null): Html | "" => {
-  const flash = status && Object.hasOwn(FLASH, status) ? FLASH[status] : undefined;
-  return flash ? html`<p class="${flash.ok ? "flash-ok" : "flash-error"}" role="status">${flash.text}</p>` : "";
+  const entry = status && Object.hasOwn(FLASH, status) ? FLASH[status] : undefined;
+  return entry ? flash(entry.ok, entry.text) : "";
 };
 
 type ChannelsView = {
@@ -136,6 +145,7 @@ type ChannelsView = {
   linearDown: boolean;
   flash: string | null;
   csrf: string;
+  render: Page;
 };
 
 const channelForm = (action: string, csrf: string, channelId: string, inner: Html): Html =>
@@ -145,12 +155,12 @@ const channelRow = (channel: Channel, view: ChannelsView): Html => {
   const linked = view.linksOf(channel.id);
   const available = view.projects.filter((project) => !linked.some((l) => l.id === project.id));
   const membership = channel.isMember
-    ? html`<span class="joined">El bot participa</span>`
-    : html`<span class="invite">Invite al bot al canal (/invite) para recibir avisos</span>`;
+    ? html`<span class="joined">${pill("success", "El bot participa")}</span>`
+    : html`${pill("warning", "El bot no participa")} <span class="muted">Invita al bot al canal (/invite) para recibir avisos</span>`;
   const items = linked.map((project) =>
-    html`<li>${project.name} ${channelForm("/admin/channels/unlink", view.csrf, channel.id, html`<input type="hidden" name="project" value="${project.id}"><button type="submit">Desvincular</button>`)}</li>`);
+    html`<li>${project.name} ${channelForm("/admin/channels/unlink", view.csrf, channel.id, html`<input type="hidden" name="project" value="${project.id}">${button({ label: "Desvincular" })}`)}</li>`);
   const addForm = available.length
-    ? channelForm("/admin/channels/link", view.csrf, channel.id, html`<label>Proyecto <select name="project">${available.map((p) => html`<option value="${p.id}">${p.name}</option>`)}</select></label> <button type="submit">Vincular</button>`)
+    ? channelForm("/admin/channels/link", view.csrf, channel.id, html`<label>Proyecto <select name="project">${available.map((p) => html`<option value="${p.id}">${p.name}</option>`)}</select></label> ${button({ label: "Vincular", variant: "primary" })}`)
     : "";
   return html`<tr data-channel>
 <td>#${channel.name}</td>
@@ -161,56 +171,58 @@ const channelRow = (channel: Channel, view: ChannelsView): Html => {
 
 const channelsPage = (view: ChannelsView): Html => {
   const warning = view.linearDown
-    ? html`<p class="flash-error" role="alert">No se pudo consultar Linear. Solo se pueden vincular los proyectos ya conocidos.</p>`
+    ? flash(false, "No se pudo consultar Linear. Solo se pueden vincular los proyectos ya conocidos.")
     : "";
-  const refresh = html`<form method="post" action="/admin/channels/refresh"><input type="hidden" name="csrf" value="${view.csrf}"><button type="submit">Actualizar canales desde Slack</button></form>`;
+  const refresh = html`<form method="post" action="/admin/channels/refresh"><input type="hidden" name="csrf" value="${view.csrf}">${button({ label: "Actualizar canales desde Slack" })}</form>`;
   const table = view.channels.length
-    ? html`<table>
+    ? html`<div class="card"><table>
 <thead><tr><th scope="col">Canal</th><th scope="col">Bot</th><th scope="col">Proyectos de Linear</th></tr></thead>
 <tbody>${view.channels.map((channel) => channelRow(channel, view))}</tbody>
-</table>`
-    : html`<p>Aún no hay canales. Use «Actualizar canales desde Slack» para cargarlos.</p>`;
-  return layout({ title: "Canales", current: "channels", body: html`${flashNotice(view.flash)}${warning}${refresh}${table}` });
+</table></div>`
+    : emptyState("Aún no hay canales.", "Usa «Actualizar canales desde Slack» para cargarlos.");
+  return view.render({ title: "Canales", current: "channels", body: html`${flashNotice(view.flash)}${warning}<div class="toolbar">${refresh}</div>${table}` });
 };
 
 const SOURCES: Record<MatchSource, string> = { auto: "Automático", manual: "Manual", unmatched: "Sin vincular" };
+const SOURCE_TONES: Record<MatchSource, Tone> = { auto: "success", manual: "manual", unmatched: "neutral" };
 
 const personForm = (csrf: string, person: Person, inner: Html): Html =>
   html`<form method="post" action="/admin/people/override"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="user" value="${person.linearUserId}">${inner}</form>`;
 
 const personRow = (person: Person, csrf: string): Html => {
-  const setForm = personForm(csrf, person, html`<label>ID de Slack <input name="slack" pattern="[UW][A-Z0-9]+" placeholder="U01ABC23DEF" required></label> <button type="submit">Guardar vínculo</button>`);
+  const setForm = personForm(csrf, person, html`<label>ID de Slack <input name="slack" pattern="[UW][A-Z0-9]+" placeholder="U01ABC23DEF" required></label> ${button({ label: "Guardar vínculo", variant: "primary" })}`);
   const clearForm = person.matchSource === "manual"
-    ? personForm(csrf, person, html`<input type="hidden" name="slack" value=""><button type="submit">Quitar vínculo manual</button>`)
+    ? personForm(csrf, person, html`<input type="hidden" name="slack" value="">${button({ label: "Quitar vínculo manual", variant: "danger" })}`)
     : "";
   return html`<tr data-person>
 <td>${person.name}</td>
 <td>${person.email ?? html`<span class="muted">—</span>`}</td>
-<td>${SOURCES[person.matchSource]}</td>
+<td>${pill(Object.hasOwn(SOURCE_TONES, person.matchSource) ? SOURCE_TONES[person.matchSource] : "neutral", SOURCES[person.matchSource])}</td>
 <td>${person.slackUserId ? html`<code>${person.slackUserId}</code>` : html`<span class="muted">—</span>`}</td>
 <td>${setForm}${clearForm}</td>
 </tr>`;
 };
 
-const peoplePage = (people: Person[], linearDown: boolean, flash: string | null, csrf: string): Html => {
-  const warning = linearDown ? html`<p class="flash-error" role="alert">No se pudo consultar Linear. Se muestran las personas guardadas.</p>` : "";
-  const sync = html`<form method="post" action="/admin/people/sync"><input type="hidden" name="csrf" value="${csrf}"><button type="submit">Volver a emparejar por correo</button></form>`;
+const peoplePage = (people: Person[], linearDown: boolean, status: string | null, csrf: string, render: Page): Html => {
+  const warning = linearDown ? flash(false, "No se pudo consultar Linear. Se muestran las personas guardadas.") : "";
+  const sync = html`<form method="post" action="/admin/people/sync"><input type="hidden" name="csrf" value="${csrf}">${button({ label: "Volver a emparejar por correo" })}</form>`;
   const table = people.length
-    ? html`<table>
+    ? html`<div class="card"><table>
 <thead><tr><th scope="col">Persona</th><th scope="col">Correo</th><th scope="col">Estado</th><th scope="col">Slack</th><th scope="col">Vínculo</th></tr></thead>
 <tbody>${people.map((person) => personRow(person, csrf))}</tbody>
-</table>`
-    : html`<p>Aún no hay personas. Use «Volver a emparejar por correo» para cargarlas.</p>`;
-  return layout({ title: "Personas", current: "people", body: html`${flashNotice(flash)}${warning}${sync}${table}` });
+</table></div>`
+    : emptyState("Aún no hay personas.", "Usa «Volver a emparejar por correo» para cargarlas.");
+  return render({ title: "Personas", current: "people", body: html`${flashNotice(status)}${warning}<div class="toolbar">${sync}</div>${table}` });
 };
 
 const errorPage = (): Html =>
-  layout({ title: "Error", current: "status", body: html`<p>No se pudo cargar la página. Inténtelo de nuevo más tarde.</p>` });
+  bare({ title: "Error", body: html`<p>No se pudo cargar la página. Inténtalo de nuevo más tarde.</p>` });
 
 export const isAdminPath = (path: string): boolean => path === "/admin" || path.startsWith("/admin/");
 
 // Returns a handler for /admin and /admin/*. Every request passes Basic Auth first; POSTs also need Origin and CSRF.
-export const createAdmin = ({ store, slack, linear, password, timeZone, logger, csrfSecret = randomBytes(32).toString("hex") }: AdminOptions) => {
+export const createAdmin = ({ store, slack, linear, password, timeZone, logger, csrfSecret = randomBytes(32).toString("hex"), envLabel = null }: AdminOptions) => {
+  const render: Page = ({ title, current, body }) => shell({ title, current, envLabel, timeZone, body });
   const page = (res: ServerResponse, status: number, content: Html): void =>
     sendHtml(res, status, content.value, SECURITY_HEADERS);
 
@@ -229,7 +241,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
     }
     page(res, 200, channelsPage({
       channels: store.listChannels(), projects: store.listProjects(), linksOf: (id) => store.projectsForChannel(id),
-      linearDown, flash: status, csrf: csrfToken(csrfSecret),
+      linearDown, flash: status, csrf: csrfToken(csrfSecret), render,
     }));
   };
 
@@ -250,13 +262,13 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
       logUpstream("Linear user list", error);
       linearDown = true;
     }
-    page(res, 200, peoplePage(store.listPeople().filter((person) => person.active !== false), linearDown, status, csrfToken(csrfSecret)));
+    page(res, 200, peoplePage(store.listPeople().filter((person) => person.active !== false), linearDown, status, csrfToken(csrfSecret), render));
   };
 
   const get = async (res: ServerResponse, path: string, search: URLSearchParams): Promise<void> => {
     const route = path.replace(/\/+$/, "") || "/";
     if (route === "/admin") return redirect(res, "/admin/status", SECURITY_HEADERS);
-    if (route === "/admin/status") return page(res, 200, statusPage(store, timeZone, search.get("all") === "1"));
+    if (route === "/admin/status") return page(res, 200, statusPage(store, timeZone, search.get("all") === "1", render));
     if (route === "/admin/channels") return channels(res, search.get("status"));
     if (route === "/admin/people") return people(res, search.get("status"));
     send(res, 404, { error: "not found" }, SECURITY_HEADERS);
@@ -342,7 +354,7 @@ export const createAdmin = ({ store, slack, linear, password, timeZone, logger, 
     // Static assets carry no admin data, so they are served before authentication.
     if (path.startsWith(ASSETS_PREFIX) && (req.method === "GET" || req.method === "HEAD")) {
       const version = new URL(req.url ?? "", "http://localhost").searchParams.get("v");
-      return serveAsset(res, safeDecode(path.slice(ASSETS_PREFIX.length)), version);
+      return serveAsset(res, safeDecode(path.slice(ASSETS_PREFIX.length)), version, SECURITY_HEADERS);
     }
     if (!checkBasicAuth(req.headers.authorization, password)) {
       return send(res, 401, { error: "unauthorized" }, { ...SECURITY_HEADERS, "www-authenticate": 'Basic realm="Notifier Hub", charset="UTF-8"' });
