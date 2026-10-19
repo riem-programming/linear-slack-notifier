@@ -176,7 +176,7 @@ const snapshotPage = (nodes: unknown[], endCursor: string | null = null, project
         project: {
           id: "p1",
           name: "Web",
-          projectMilestones: { nodes: [{ id: "m1", name: "Beta", sortOrder: 2 }, { id: "m0", name: "Alpha", sortOrder: 1 }] },
+          projectMilestones: { nodes: [{ id: "m1", name: "Beta", sortOrder: 2, targetDate: "2026-10-30" }, { id: "m0", name: "Alpha", sortOrder: 1, targetDate: null }] },
           issues: { nodes, pageInfo: { hasNextPage: endCursor !== null, endCursor } },
           ...project,
         },
@@ -199,7 +199,7 @@ test("projectSnapshot sends one aggregated query and maps issues and milestones"
   assert.equal(headers.authorization, "lin_api_secret");
   const body = JSON.parse(calls[0]?.init.body as string) as { query: string; variables: { id: string; after: string | null } };
   assert.deepEqual(body.variables, { id: "p1", after: null, withMilestones: true });
-  for (const field of ["identifier", "url", "dueDate", "completedAt", "position", "assignee", "projectMilestone", "projectMilestones", "pageInfo"]) {
+  for (const field of ["identifier", "url", "dueDate", "completedAt", "position", "assignee", "projectMilestone", "projectMilestones", "targetDate", "pageInfo"]) {
     assert.match(body.query, new RegExp(field));
   }
   assert.equal(snapshot.name, "Web");
@@ -216,7 +216,10 @@ test("projectSnapshot sends one aggregated query and maps issues and milestones"
       milestoneId: "m1",
     },
   ]);
-  assert.deepEqual(snapshot.milestones, [{ id: "m0", name: "Alpha", sortOrder: 1 }, { id: "m1", name: "Beta", sortOrder: 2 }]);
+  assert.deepEqual(snapshot.milestones, [
+    { id: "m0", name: "Alpha", sortOrder: 1, targetDate: null },
+    { id: "m1", name: "Beta", sortOrder: 2, targetDate: "2026-10-30" },
+  ]);
 });
 
 test("projectSnapshot follows issue cursors and skips malformed nodes", async () => {

@@ -117,9 +117,9 @@ test("midnight in Lima decides the day, not UTC", () => {
 
 test("active milestone is the first by sort order below 100% and progress ignores canceled issues", () => {
   const milestones = [
-    { id: "m0", name: "Alpha", sortOrder: 1 },
-    { id: "m1", name: "Beta", sortOrder: 2 },
-    { id: "m2", name: "Empty", sortOrder: 3 },
+    { id: "m0", name: "Alpha", sortOrder: 1, targetDate: null },
+    { id: "m1", name: "Beta", sortOrder: 2, targetDate: null },
+    { id: "m2", name: "Empty", sortOrder: 3, targetDate: null },
   ];
   const inBeta = (id: string, extra: Partial<SnapshotIssue> = {}) => issue(id, { milestoneId: "m1", ...extra });
   const issues = [
@@ -145,7 +145,7 @@ test("renderStatus matches the approved layout, with plain names and Spanish dat
     inBeta("D-1", { state: done, completedAt: "2026-10-14T12:00:00Z" }),
     inBeta("D-2", { state: done, completedAt: "2026-09-01T12:00:00Z" }),
   ];
-  const text = renderStatus(summarizeProject(snapshot(issues, { milestones: [{ id: "m1", name: "Beta", sortOrder: 1 }] }), NOW, TZ));
+  const text = renderStatus(summarizeProject(snapshot(issues, { milestones: [{ id: "m1", name: "Beta", sortOrder: 1, targetDate: null }] }), NOW, TZ));
   assert.equal(
     text,
     [
@@ -231,7 +231,7 @@ test("matchProject reports ambiguity and unknown names", () => {
 test("Slack formatting characters in user text are neutralized without breaking the layout", () => {
   const formatted = issue("K-1", { title: "*bold* _it_ ~x~ `code`", assignee: "_Eve_", dueDate: "2026-10-01", state: { name: "*Doing*", type: "started", position: 1 } });
   const text = renderStatus(
-    summarizeProject(snapshot([formatted], { name: "*Beta_2*", milestones: [{ id: "m", name: "_M_", sortOrder: 1 }] }), NOW, TZ),
+    summarizeProject(snapshot([formatted], { name: "*Beta_2*", milestones: [{ id: "m", name: "_M_", sortOrder: 1, targetDate: null }] }), NOW, TZ),
   );
   const visible = text.replaceAll("​", "");
   assert.match(visible, /Estado de \*\*Beta_2\*\* —/);
