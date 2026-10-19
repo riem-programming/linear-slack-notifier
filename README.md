@@ -11,7 +11,7 @@ Operating it day to day: [docs/OPERATIONS.md](docs/OPERATIONS.md). Team GitHub a
 | Notifications | Linear `Issue` events become Slack notices: created, assigned, completed, canceled. Everything else is ignored. |
 | Mentions | People are matched to Slack users by email and mentioned with `@`. The actor is never mentioned. Unmatched people appear as plain names. |
 | Channel routing | Many-to-many: one project can post to several channels, and one channel can follow several projects. Changed at runtime in the admin panel. |
-| Status | `/estado-proyecto [project]` (name set by `SLACK_COMMAND_NAME`) and `@bot [project]` reply with a project summary: states, overdue, due in 7 days, completed this week, milestone progress. |
+| Status | `/estado-proyecto [project]` (name set by `SLACK_COMMAND_NAME`) and `@bot [project]` reply with a project status report: health (on track, at risk, late), progress, milestone deliverables and overdue tickets. See [docs/STATUS-REPORT.md](docs/STATUS-REPORT.md) (Spanish, for the team). |
 | Admin panel | `/admin`: Estado (event log), Canales (project to channel links), Personas (Linear to Slack matching). |
 
 Slack texts are in Spanish. An issue with no project, or a project with no linked channel, is skipped and the reason shows on the Estado screen.

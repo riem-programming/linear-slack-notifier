@@ -11,103 +11,111 @@ const shorten = (value: string): string => {
   return chars.length > TITLE_CAP ? `${chars.slice(0, TITLE_CAP - 1).join("")}…` : value;
 };
 
-const DAY_MS = 86_400_000;
 const LIST_CAP = 10;
 const DIVIDER = "\n\n──────────\n\n";
-const WEEKDAYS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
 const MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
 export type StatusItem = { identifier: string; url: string; title: string; assignee: string | null; dueDate: string };
+export type MilestoneRow = {
+  name: string;
+  done: number;
+  total: number;
+  percent: number;
+  icon: "✅" | "🔵" | "⬜";
+  complete: boolean;
+  targetDate: string | null;
+};
+export type ProjectHealth = "ok" | "risk" | "late";
 export type ProjectSummary = {
   name: string;
   today: string; // YYYY-MM-DD in the status time zone
-  states: { name: string; count: number }[];
-  completedLast7Days: number;
+  health: ProjectHealth;
+  done: number;
+  total: number;
+  percent: number;
+  milestones: MilestoneRow[];
   overdue: StatusItem[];
-  dueSoon: StatusItem[]; // today through today+6
-  milestone: { name: string; percent: number; done: number; total: number } | null;
   truncated: boolean;
 };
 
 // Calendar day (YYYY-MM-DD) of an instant in a time zone.
 const localDay = (at: number, timeZone: string): string => new Intl.DateTimeFormat("en-CA", { timeZone }).format(at);
-// Day-only strings are plain calendar dates, so UTC arithmetic on them is exact.
-const dayOfWeek = (day: string): number => new Date(`${day}T00:00:00Z`).getUTCDay();
-const addDays = (day: string, days: number): string => new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 const shortDate = (day: string): string => `${Number(day.slice(8, 10))} ${MONTHS[Number(day.slice(5, 7)) - 1] ?? ""}`;
-const weekdayDate = (day: string): string => `${WEEKDAYS[dayOfWeek(day)] ?? ""} ${shortDate(day)}`;
+const percentOf = (done: number, total: number): number => (total === 0 ? 0 : Math.round((done / total) * 100));
 
 const isClosed = (issue: SnapshotIssue): boolean => issue.state.type === "completed" || issue.state.type === "canceled";
 const byDueDate = (a: StatusItem, b: StatusItem): number => a.dueDate.localeCompare(b.dueDate) || a.identifier.localeCompare(b.identifier);
 
-// "Due soon" is a 7-calendar-day window in the status time zone: today through today+6, whatever the weekday.
 export const summarizeProject = (snapshot: ProjectSnapshot, now: number, timeZone: string): ProjectSummary => {
   const today = localDay(now, timeZone);
-  const windowEnd = addDays(today, 6);
+  const counted = snapshot.issues.filter((issue) => issue.state.type !== "canceled");
+  const done = counted.filter((issue) => issue.state.type === "completed").length;
 
-  const stateCounts = new Map<string, { count: number; position: number }>();
   const overdue: StatusItem[] = [];
-  const dueSoon: StatusItem[] = [];
-  let completedLast7Days = 0;
   for (const issue of snapshot.issues) {
-    const entry = stateCounts.get(issue.state.name) ?? { count: 0, position: issue.state.position };
-    entry.count += 1;
-    stateCounts.set(issue.state.name, entry);
-    // Rolling window: the 7 x 24 hours before now.
-    const completedAt = issue.completedAt ? Date.parse(issue.completedAt) : Number.NaN;
-    if (completedAt <= now && completedAt >= now - 7 * DAY_MS) completedLast7Days += 1;
-    if (!issue.dueDate || isClosed(issue)) continue;
-    const item = { identifier: issue.identifier, url: issue.url, title: issue.title, assignee: issue.assignee, dueDate: issue.dueDate };
-    if (issue.dueDate < today) overdue.push(item);
-    else if (issue.dueDate <= windowEnd) dueSoon.push(item);
+    if (!issue.dueDate || isClosed(issue) || issue.dueDate >= today) continue;
+    overdue.push({ identifier: issue.identifier, url: issue.url, title: issue.title, assignee: issue.assignee, dueDate: issue.dueDate });
   }
 
-  let milestone: ProjectSummary["milestone"] = null;
-  for (const candidate of snapshot.milestones) {
-    const issues = snapshot.issues.filter((issue) => issue.milestoneId === candidate.id && issue.state.type !== "canceled");
-    const done = issues.filter((issue) => issue.state.type === "completed").length;
-    if (issues.length > 0 && done < issues.length) {
-      milestone = { name: candidate.name, percent: Math.round((done / issues.length) * 100), done, total: issues.length };
-      break;
-    }
-  }
+  const milestones = snapshot.milestones.map((milestone): MilestoneRow => {
+    const issues = counted.filter((issue) => issue.milestoneId === milestone.id);
+    const finished = issues.filter((issue) => issue.state.type === "completed").length;
+    const complete = issues.length > 0 && finished === issues.length;
+    const touched = issues.some((issue) => issue.state.type === "started" || issue.state.type === "completed");
+    return {
+      name: milestone.name,
+      done: finished,
+      total: issues.length,
+      percent: percentOf(finished, issues.length),
+      icon: complete ? "✅" : touched ? "🔵" : "⬜",
+      complete,
+      targetDate: milestone.targetDate,
+    };
+  });
 
+  const late = milestones.some((row) => !row.complete && row.targetDate !== null && row.targetDate < today);
   return {
     name: snapshot.name,
     today,
-    states: [...stateCounts].sort((a, b) => a[1].position - b[1].position).map(([name, { count }]) => ({ name, count })),
-    completedLast7Days,
+    health: late ? "late" : overdue.length > 0 ? "risk" : "ok",
+    done,
+    total: counted.length,
+    percent: percentOf(done, counted.length),
+    milestones,
     overdue: overdue.sort(byDueDate),
-    dueSoon: dueSoon.sort(byDueDate),
-    milestone,
     truncated: snapshot.truncated,
   };
 };
 
-const renderList = (heading: string, items: StatusItem[], when: (day: string) => string): string[] => {
+const HEALTH_LABEL: Record<ProjectHealth, string> = { ok: "🟢 Al día", risk: "🟡 En riesgo", late: "🔴 Atrasado" };
+
+const renderMilestone = (row: MilestoneRow, today: string): string => {
+  let line = `${row.icon} ${esc(row.name)} — ${row.percent}% (${row.done}/${row.total})`;
+  if (row.targetDate && !row.complete) {
+    line += row.targetDate >= today ? ` · vence ${shortDate(row.targetDate)}` : ` · venció ${shortDate(row.targetDate)} ⚠️`;
+  }
+  return line;
+};
+
+const renderOverdue = (items: StatusItem[]): string[] => {
   if (items.length === 0) return [];
   const lines = items.slice(0, LIST_CAP).map((item) => {
     const who = item.assignee ? esc(item.assignee) : "Sin asignar";
     const id = item.url ? `<${escapeUrl(item.url)}|${esc(item.identifier)}>` : esc(item.identifier);
-    return `• ${id} ${esc(shorten(item.title))} — ${who} (${when(item.dueDate)})`;
+    return `• ${id} ${esc(shorten(item.title))} — ${who} (${shortDate(item.dueDate)})`;
   });
   if (items.length > LIST_CAP) lines.push(`+${items.length - LIST_CAP} más`);
-  return [`${heading} (${items.length})`, ...lines];
+  return [`Tickets vencidos (${items.length}):`, ...lines];
 };
 
 export const renderStatus = (summary: ProjectSummary): string => {
-  const lines = [`📊 Estado de *${esc(summary.name)}* — ${shortDate(summary.today)}`, ""];
-  lines.push(summary.states.length ? `Por estado: ${summary.states.map((s) => `${esc(s.name)} ${s.count}`).join(" · ")}` : "Sin tareas.");
-  lines.push(`Completadas (últimos 7 días): ${summary.completedLast7Days}`);
-  const sections = [
-    ...renderList("⚠️ Vencidas", summary.overdue, (day) => `venció ${shortDate(day)}`),
-    ...renderList("📅 Vencen en los próximos 7 días", summary.dueSoon, weekdayDate),
+  const lines = [
+    `📊 Estado de *${esc(summary.name)}* — ${shortDate(summary.today)}`,
+    `${HEALTH_LABEL[summary.health]} · Avance ${summary.percent}% (${summary.done}/${summary.total})`,
   ];
-  if (sections.length) lines.push("", ...sections);
-  if (summary.milestone) {
-    const { name, percent, done, total } = summary.milestone;
-    lines.push("", `🎯 Milestone activo: ${esc(name)} — ${percent}% (${done}/${total})`);
-  }
+  if (summary.milestones.length) lines.push("", "Entregables:", ...summary.milestones.map((row) => renderMilestone(row, summary.today)));
+  const overdue = renderOverdue(summary.overdue);
+  if (overdue.length) lines.push("", ...overdue);
   if (summary.truncated) lines.push("", "Se muestran solo las primeras 1.000 tareas del proyecto.");
   return lines.join("\n");
 };

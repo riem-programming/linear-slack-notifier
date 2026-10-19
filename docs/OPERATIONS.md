@@ -89,7 +89,7 @@ Rules:
 
 To rotate it, delete the webhook, create a new one with the same URL, update the env var and deploy.
 
-**API key.** Create a personal API key in Linear with **read-only** permission and set it as `LINEAR_API_KEY`. The service uses it to list projects and users and to build status summaries. It never writes to Linear.
+**API key.** Create a personal API key in Linear with **read-only** permission and set it as `LINEAR_API_KEY`. The service uses it to list projects and users and to build status reports (see [STATUS-REPORT.md](STATUS-REPORT.md) for what the report shows and how health is computed). It never writes to Linear.
 
 ## Deploy on Dokploy
 
