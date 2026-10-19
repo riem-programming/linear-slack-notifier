@@ -22,7 +22,7 @@ export type SnapshotIssue = {
   assignee: string | null; // plain name only
   milestoneId: string | null;
 };
-export type SnapshotMilestone = { id: string; name: string; sortOrder: number };
+export type SnapshotMilestone = { id: string; name: string; sortOrder: number; targetDate: string | null }; // targetDate: YYYY-MM-DD, no time zone
 export type ProjectSnapshot = {
   id: string;
   name: string;
@@ -57,7 +57,7 @@ const SNAPSHOT_QUERY = `query ProjectSnapshot($id: String!, $after: String, $wit
   project(id: $id) {
     id
     name
-    projectMilestones(first: 100) @include(if: $withMilestones) { nodes { id name sortOrder } }
+    projectMilestones(first: 100) @include(if: $withMilestones) { nodes { id name sortOrder targetDate } }
     issues(first: 100, after: $after) {
       nodes {
         identifier url title dueDate completedAt
@@ -94,7 +94,7 @@ const toIssue = (node: unknown): SnapshotIssue | null => {
 };
 const toMilestone = (node: unknown): SnapshotMilestone | null =>
   isRecord(node) && text(node.id) && text(node.name)
-    ? { id: text(node.id), name: text(node.name), sortOrder: typeof node.sortOrder === "number" ? node.sortOrder : 0 }
+    ? { id: text(node.id), name: text(node.name), sortOrder: typeof node.sortOrder === "number" ? node.sortOrder : 0, targetDate: text(node.targetDate) || null }
     : null;
 const toUser = (node: unknown): LinearUser | null =>
   isRecord(node) && text(node.id) && text(node.name)
