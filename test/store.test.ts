@@ -341,3 +341,10 @@ test("setChannelProjects surfaces the original error when ROLLBACK itself fails"
   const store = createStore(flaky, clock());
   assert.throws(() => store.setChannelProjects("C1", ["missing"]), (error: Error) => !/rollback failed/.test(error.message));
 });
+
+test("getProject returns the stored project or null", () => {
+  const { store } = setup();
+  store.upsertProject({ id: "p1", name: "MAiA" });
+  assert.deepEqual(store.getProject("p1"), { id: "p1", name: "MAiA" });
+  assert.equal(store.getProject("nope"), null);
+});

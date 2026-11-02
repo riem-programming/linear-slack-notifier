@@ -106,7 +106,7 @@ test("unknown route returns 404", async () => {
 test("valid signed webhook posts to the linked channel and logs one notified row", async () => {
   await withApp(async (h) => {
     await deliver(h, payload(1_000_000), "d-1");
-    assert.deepEqual(h.sent, ["C1|Ana creó <https://l/K-1|K-1>: T"]);
+    assert.deepEqual(h.sent, ["C1|*Web* · Ana creó <https://l/K-1|K-1>: T"]);
     const rows = h.store.recentEvents();
     assert.equal(rows.length, 1);
     assert.deepEqual(
@@ -145,7 +145,7 @@ test("one failing channel is logged as failed with its error while the other sti
     h.store.upsertChannel({ id: "C2", name: "dev", isMember: false });
     h.store.link("C2", "proj-1");
     await deliver(h, payload(1_000_000), "d-1");
-    assert.deepEqual(h.sent, ["C1|Ana creó <https://l/K-1|K-1>: T"]);
+    assert.deepEqual(h.sent, ["C1|*Web* · Ana creó <https://l/K-1|K-1>: T"]);
     const [row] = h.store.recentEvents();
     assert.equal(row?.outcome, "failed");
     assert.equal(row?.reason, "post-failed");
@@ -217,7 +217,7 @@ test("mentions come from the people stored in SQLite", async () => {
   await withApp(async (h) => {
     h.store.upsertPerson({ linearUserId: "u-beto", name: "Beto", email: null, slackUserId: "UBETO", matchSource: "manual" });
     await deliver(h, createdBody({ id: "u-beto" }), "d-1");
-    assert.deepEqual(h.sent, ["C1|Ana creó <https://l/K-1|K-1>: T y se lo asignó a <@UBETO>"]);
+    assert.deepEqual(h.sent, ["C1|*Web* · Ana creó <https://l/K-1|K-1>: T y se lo asignó a <@UBETO>"]);
     assert.equal(h.store.recentEvents()[0]?.assigneeId, "u-beto");
   });
 });
