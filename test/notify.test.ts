@@ -16,7 +16,8 @@ const notice = (kind: NoticeKind, extra: Partial<IssueNotice> = {}): IssueNotice
   kind, actor: ana, creator: ana, assignee: luis, issueId: "i-42",
   identifier: "KAMAITI-42", title: "Diseñar landing", url, projectId: "p", ...extra,
 });
-const render = (n: IssueNotice, find: PersonLookup = lookup) => renderNotice(n, planMentions(n, find));
+const render = (n: IssueNotice, find: PersonLookup = lookup, project: string | null = null) =>
+  renderNotice(n, planMentions(n, find), project);
 
 test("created with assignee mentions the assignee once, actor as plain text", () => {
   assert.equal(render(notice("created")), `Ana Gómez creó ${link}: Diseñar landing y se lo asignó a <@ULUIS>`);
@@ -149,4 +150,32 @@ test("mentioned excludes the actor, unmatched people and notices without mention
   assert.deepEqual(planMentions(notice("assigned", { assignee: ana }), lookup).mentioned, []);
   assert.deepEqual(planMentions(notice("created", { assignee: { id: "u-z", name: "Zoe" } }), lookup).mentioned, []);
   assert.deepEqual(planMentions(notice("created", { assignee: null }), lookup).mentioned, []);
+});
+
+test("a known project name prefixes every kind in bold", () => {
+  assert.equal(
+    render(notice("created"), lookup, "MAiA"),
+    `*MAiA* · Ana Gómez creó ${link}: Diseñar landing y se lo asignó a <@ULUIS>`,
+  );
+  assert.equal(render(notice("assigned"), lookup, "MAiA"), `*MAiA* · Ana Gómez asignó ${link} a <@ULUIS>: Diseñar landing`);
+  assert.equal(
+    render(notice("completed", { actor: luis, creator: ana, assignee: luis }), lookup, "Tareas Administrativas"),
+    `*Tareas Administrativas* · Luis Pérez completó ${link} ✅: Diseñar landing · cc <@UANA>`,
+  );
+  assert.ok(render(notice("canceled"), lookup, "MAiA")?.startsWith("*MAiA* · Ana Gómez canceló"));
+});
+
+test("project name is escaped and cannot break the bold", () => {
+  const text = render(notice("created", { assignee: null }), lookup, "A*B <&> *");
+  assert.ok(text?.startsWith("*AB &lt;&amp;&gt;* · Ana Gómez creó"));
+  assert.equal(render(notice("created", { assignee: null }), lookup, "***"), `Ana Gómez creó ${link}: Diseñar landing`);
+});
+
+test("an empty or missing project name renders without prefix", () => {
+  assert.equal(render(notice("created", { assignee: null }), lookup, ""), `Ana Gómez creó ${link}: Diseñar landing`);
+  assert.equal(render(notice("created", { assignee: null }), lookup, null), `Ana Gómez creó ${link}: Diseñar landing`);
+});
+
+test("unresolvable assignee still yields null with a project name", () => {
+  assert.equal(render(notice("assigned", { assignee: null }), lookup, "MAiA"), null);
 });

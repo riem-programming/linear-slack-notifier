@@ -63,7 +63,15 @@ export const planMentions = (notice: IssueNotice, lookup: PersonLookup): Mention
 };
 
 /** Renders the Spanish Slack mrkdwn notice. Returns null for an `assigned` notice whose assignee cannot be written. */
-export const renderNotice = (notice: IssueNotice, plan: MentionPlan): string | null => {
+export const renderNotice = (notice: IssueNotice, plan: MentionPlan, projectName: string | null = null): string | null => {
+  const body = renderBody(notice, plan);
+  if (body === null) return null;
+  // Asterisks are dropped so the name cannot close the bold early.
+  const name = projectName ? escapeText(projectName.replace(/\*/g, "")).trim() : "";
+  return name ? `*${name}* · ${body}` : body;
+};
+
+const renderBody = (notice: IssueNotice, plan: MentionPlan): string | null => {
   const link = `<${escapeUrl(notice.url)}|${escapeText(notice.identifier)}>`;
   const title = escapeText(notice.title);
   const cc = plan.cc.length > 0 ? ` · cc ${plan.cc.join(" ")}` : "";

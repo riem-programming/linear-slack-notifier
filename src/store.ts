@@ -60,6 +60,7 @@ export type Store = {
   upsertProject: (project: Project) => void;
   listChannels: () => Channel[];
   listProjects: () => Project[];
+  getProject: (id: string) => Project | null;
   link: (channelId: string, projectId: string) => boolean;
   unlink: (channelId: string, projectId: string) => boolean;
   // Makes the channel's links equal `projectIds` in one transaction; throws (and changes nothing) on any failure.
@@ -141,6 +142,10 @@ export const createStore = (db: DatabaseSync, now: () => number = Date.now): Sto
     },
     listChannels: () => all("SELECT * FROM channels ORDER BY name, id").map(toChannel),
     listProjects: () => all("SELECT * FROM projects ORDER BY name, id").map(toProject),
+    getProject: (id) => {
+      const [row] = all("SELECT * FROM projects WHERE id = ?", id);
+      return row ? toProject(row) : null;
+    },
     link: (channelId, projectId) =>
       Number(
         db
