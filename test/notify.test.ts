@@ -169,6 +169,7 @@ test("project name is escaped and cannot break the bold", () => {
   const text = render(notice("created", { assignee: null }), lookup, "A*B <&> *");
   assert.ok(text?.startsWith("*AB &lt;&amp;&gt;* · Ana Gómez creó"));
   assert.equal(render(notice("created", { assignee: null }), lookup, "***"), `Ana Gómez creó ${link}: Diseñar landing`);
+  assert.ok(render(notice("created", { assignee: null }), lookup, "Ma`iA\n Web\t")?.startsWith("*MaiA Web* · Ana Gómez creó"));
 });
 
 test("an empty or missing project name renders without prefix", () => {

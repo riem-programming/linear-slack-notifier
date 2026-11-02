@@ -66,8 +66,8 @@ export const planMentions = (notice: IssueNotice, lookup: PersonLookup): Mention
 export const renderNotice = (notice: IssueNotice, plan: MentionPlan, projectName: string | null = null): string | null => {
   const body = renderBody(notice, plan);
   if (body === null) return null;
-  // Asterisks are dropped so the name cannot close the bold early.
-  const name = projectName ? escapeText(projectName.replace(/\*/g, "")).trim() : "";
+  // Asterisks and backticks are dropped and whitespace collapsed so the name cannot break the bold.
+  const name = projectName ? escapeText(projectName.replace(/[*`]/g, "").replace(/\s+/g, " ")).trim() : "";
   return name ? `*${name}* · ${body}` : body;
 };
 
