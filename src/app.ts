@@ -73,7 +73,11 @@ export const createApp = ({
 
   const decide = (result: IssueNotice | Ignored): Promise<RouteResult> | RouteResult => {
     if (result.kind === "ignored") return skipped(result.reason);
-    const text = renderNotice(result, planMentions(result, lookup));
+    const text = renderNotice(
+      result,
+      planMentions(result, lookup),
+      result.projectId ? (store.getProject(result.projectId)?.name ?? null) : null,
+    );
     if (!text) return skipped("assignee-not-resolvable");
     // Linear sends create and then an assignee update for an issue created already assigned: one notice is enough.
     const assigneeId = result.assignee?.id;
